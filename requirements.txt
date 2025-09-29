@@ -1,0 +1,4 @@
+nerfstudio==0.3.4
+gsplat==0.1.11
+ninja>=1.11
+torch>=2.1

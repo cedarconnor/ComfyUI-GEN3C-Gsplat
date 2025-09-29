@@ -43,13 +43,13 @@
 ```
 
 ## 4. Node Inventory & Status
-- ✅ `Gen3C_CameraTrajectory` — presets + custom keyframes, returns structured traj JSON.
-- ✅ `Cosmos_Gen3C_InferExport` — writes Nerfstudio-style datasets and optional metadata.
-- ✅ `SplatTrainer_Nerfstudio` — CLI wrapper for `ns-train` + `ns-export`.
-- ✅ `SplatTrainer_gsplat` — depth-initialised optimiser built on `gsplat`.
-- ⏳ `Cosmos_Gen3C_Loader` + inference wrapper — pending duplication of native Cosmos loader so we can inject trajectories and capture depth/frames directly.
-- ⏳ `Gen3C_PoseDepth_FromVideo` — placeholder stub for ViPE/pose recovery integration.
-- 🔭 Optional: trajectory preview, dataset validator, quality filters.
+- [done] `Gen3C_CameraTrajectory` — presets + custom keyframes, returns structured traj JSON.
+- [done] `Cosmos_Gen3C_InferExport` — writes Nerfstudio-style datasets with derived intrinsics/depth metadata.
+- [done] `SplatTrainer_Nerfstudio` — CLI wrapper for `ns-train` + `ns-export`.
+- [done] `SplatTrainer_gsplat` — depth-initialised optimiser built on `gsplat`, now falls back to SfM seeding when depth maps are absent.
+- [in-progress] `Cosmos_Gen3C_Loader` + inference wrapper — pending duplication of native Cosmos loader so we can inject trajectories and capture depth/frames directly.
+- [todo] `Gen3C_PoseDepth_FromVideo` — placeholder stub for ViPE/pose recovery integration.
+- [nice-to-have] Optional: trajectory preview, dataset validator, quality filters.
 
 ## 5. Dataset Schema
 Default layout (Nerfstudio `transforms.json`):
@@ -76,26 +76,28 @@ Depth formats supported: `npy`, `png16`, `pfm` (configurable in the exporter).
 
 ## 6. Implementation Notes
 - We vendor native Cosmos nodes into `comfy_gen3c/duplicated/` to avoid altering core ComfyUI.
-- Camera maths is self-contained (look-at, interpolation) and outputs both camera→world and world→camera transforms for downstream projections.
-- gsplat trainer initialises Gaussians from depth reprojection, optimises means/log-scales/quaternions/colour/opacity with Adam, and emits an ASCII `.ply` ready for Comfy3D.
+- Camera maths is self-contained (look-at, interpolation) and outputs both camera->world and world->camera transforms for downstream projections.
+- Dataset exporter now derives Nerfstudio-compatible metadata (intrinsics, frame paths, optional depth) directly from the trajectory payload.
+- gsplat trainer initialises Gaussians from depth reprojection when available and falls back to a synthetic SfM-style point cloud otherwise, optimising means/log-scales/quaternions/colour/opacity with Adam before emitting an ASCII `.ply` ready for Comfy3D.
 - Windows quirks: ensure `ninja` and `cl.exe` exist; trainer surfaces clear errors if toolchains are missing and automatically prepends the venv `Scripts` path.
 
 ## 7. Dev Plan & Milestones
 | Milestone | Status | Notes |
 |-----------|--------|-------|
-| **P0** Camera → Dataset bridge | ✅ | Trajectory node + dataset exporter live. Cosmos inference duplication still in progress. |
-| **P1** gsplat trainer | ✅ | In-process trainer implemented; handles Windows path/toolchain edge cases. |
-| **P2** Depth-aware init | ✅ | gsplat trainer seeds from depth maps via recorded transforms. |
-| **P3** Quality & UX | ⏳ | Pending: trajectory preview, dataset validation, richer presets. |
+| **P0** Camera -> Dataset bridge | Done | Trajectory node + dataset exporter live; exporter now emits Nerfstudio metadata automatically. |
+| **P1** gsplat trainer | Done | In-process trainer implemented; handles Windows path/toolchain edge cases and now tolerates missing depth via fallback seeding. |
+| **P2** Depth-aware init | Done | Depth reprojection seeds gsplat when provided; synthetic fallback keeps training usable without depth. |
+| **P3** Quality & UX | In progress | Pending: trajectory preview, dataset validation, richer presets. |
 
 ## 8. Testing & Validation
 - Unit coverage pending (trajectory maths, JSON writer, depth handling). Path forward: add simple pytest cases or inline smoke tests.
-- Manual smoke tests: run 10-frame orbit → export dataset → gsplat trainer (GPU required). Compare outputs with Nerfstudio runs for sanity.
+- Manual smoke tests: run 10-frame orbit -> export dataset -> gsplat trainer (GPU required). Compare outputs with Nerfstudio runs for sanity.
 - Future: regression graph stored under `user/default/workflows/` for quick replays.
 
 ## 9. Requirements Snapshot
 - Models: GEN3C 7B weights, Lyra VAE, Cosmos tokenizer, CLIP-L.
 - Packages: `nerfstudio`, `gsplat`, `ninja` (build tools), PyTorch with CUDA.
+- Supporting file: `requirements.txt` lists the pinned Python dependencies for this node pack.
 - Optional: ViPE/pose recovery backend for datasets without explicit trajectories.
 
 ## 10. Next Actions
@@ -118,3 +120,5 @@ def write_transforms(path: Path, frames, intrinsics):
     }
     path.write_text(json.dumps(payload, indent=2))
 ```
+
+

@@ -1,30 +1,29 @@
-"""Nodes that export GEN3C datasets for Gaussian Splat training."""
+"""Dataset exporter that saves GEN3C RGB (+ optional depth) outputs."""
 
 from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
+import numpy as np
 import torch
+from PIL import Image
 
-from .dataset.writer import FramePayload, SUPPORTED_DEPTH_FORMATS, export_dataset
+DEPTH_SUFFIX = "npy"
 
 
 class CosmosGen3CInferExport:
-    """Collects rendered frames/depth and writes Nerfstudio-style datasets."""
-
     @classmethod
-    def INPUT_TYPES(cls):
+    def INPUT_TYPES(cls):  # pragma: no cover - UI definition
         return {
             "required": {
-                "image_sequence": ("IMAGE", {}),
+                "images": ("IMAGE", {}),
                 "trajectory": ("GEN3C_TRAJECTORY", {}),
                 "output_dir": ("STRING", {"default": "${output_dir}/gen3c_dataset"}),
-                "depth_sequence": ("IMAGE", {"optional": True}),
-                "depth_format": (SUPPORTED_DEPTH_FORMATS, {"default": "npy"}),
             },
             "optional": {
+                "depth_maps": ("IMAGE", {}),
                 "metadata_json": ("STRING", {"multiline": True, "default": "{}"}),
             },
         }
@@ -34,97 +33,131 @@ class CosmosGen3CInferExport:
     FUNCTION = "export_dataset"
     CATEGORY = "GEN3C/Dataset"
 
-    def _to_frame_list(self, tensor: torch.Tensor) -> List[torch.Tensor]:
-        if tensor.ndim == 3:
-            tensor = tensor.unsqueeze(0)
-        if tensor.ndim != 4:
-            raise ValueError(f"Expected tensor with shape (F,H,W,C); received {tuple(tensor.shape)}")
-        if tensor.shape[-1] != 3:
-            raise ValueError("IMAGE tensor must have 3 channels in the last dimension.")
-        frames = tensor.detach().cpu()
-        frames = frames.permute(0, 3, 1, 2)  # (F,C,H,W)
-        return [frame.contiguous() for frame in frames]
+    def _normalize_frames(self, tensor: torch.Tensor) -> torch.Tensor:
+        if tensor.ndim == 5:
+            return tensor.squeeze(0)
+        if tensor.ndim == 4:
+            return tensor
+        raise ValueError(f"Expected tensor of shape (F,H,W,C) or (1,F,H,W,C); got {tuple(tensor.shape)}")
 
-    def _to_depth_list(self, tensor: Optional[torch.Tensor]) -> List[Optional[torch.Tensor]]:
-        if tensor is None:
-            return []
-        if tensor.ndim == 2:
-            tensor = tensor.unsqueeze(0)
-        if tensor.ndim == 3:  # (F,H,W)
-            depth_frames = tensor
-        elif tensor.ndim == 4:
-            depth_frames = tensor.squeeze(-1)
-        else:
-            raise ValueError(f"Depth tensor must have shape (F,H,W) or (F,H,W,1); received {tuple(tensor.shape)}")
-        return [frame.detach().cpu() for frame in depth_frames]
+    def _write_rgb(self, frames: torch.Tensor, root: Path) -> None:
+        rgb_dir = root / "rgb"
+        rgb_dir.mkdir(parents=True, exist_ok=True)
+        for idx, frame in enumerate(frames):
+            array = (frame.clamp(0.0, 1.0).mul(255.0).byte().cpu().numpy())
+            Image.fromarray(array).save(rgb_dir / f"frame_{idx:06d}.png")
+
+    def _write_depth(self, depth: torch.Tensor, root: Path) -> None:
+        depth_dir = root / "depth"
+        depth_dir.mkdir(parents=True, exist_ok=True)
+        for idx, frame in enumerate(depth):
+            frame_np = frame.squeeze().cpu().float().numpy()
+            np.save(depth_dir / f"frame_{idx:06d}.{DEPTH_SUFFIX}", frame_np)
+
+    def _write_transforms(
+        self,
+        trajectory: Dict[str, Any],
+        root: Path,
+        has_depth: bool,
+        metadata_override: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        frames = trajectory.get("frames", [])
+        if not frames:
+            raise ValueError("Trajectory payload is missing frame data.")
+
+        first_frame = frames[0]
+        width = int(first_frame.get("width"))
+        height = int(first_frame.get("height"))
+        if width <= 0 or height <= 0:
+            raise ValueError("Trajectory frames must include positive width/height values.")
+
+        intrinsics = first_frame.get("intrinsics")
+        if not intrinsics:
+            raise ValueError("Trajectory frames missing intrinsics matrix.")
+        fx = float(intrinsics[0][0])
+        fy = float(intrinsics[1][1])
+        cx = float(intrinsics[0][2])
+        cy = float(intrinsics[1][2])
+
+        fps = trajectory.get("fps", 24)
+        handedness = trajectory.get("handedness")
+
+        serialized_frames = []
+        for idx, frame in enumerate(frames):
+            extrinsics = frame.get("extrinsics", {})
+            cam_to_world = extrinsics.get("camera_to_world")
+            if cam_to_world is None:
+                raise ValueError("Frame metadata missing camera_to_world transform.")
+
+            frame_payload = {
+                "file_path": f"rgb/frame_{idx:06d}.png",
+                "transform_matrix": cam_to_world,
+                "frame": frame.get("frame", idx),
+            }
+            world_to_camera = extrinsics.get("world_to_camera")
+            if world_to_camera is not None:
+                frame_payload["world_to_camera"] = world_to_camera
+            if has_depth:
+                frame_payload["depth_path"] = f"depth/frame_{idx:06d}.{DEPTH_SUFFIX}"
+            serialized_frames.append(frame_payload)
+
+        transforms = {
+            "camera_model": "OPENCV",
+            "w": width,
+            "h": height,
+            "fl_x": fx,
+            "fl_y": fy,
+            "cx": cx,
+            "cy": cy,
+            "fps": fps,
+            "handedness": handedness,
+            "frames": serialized_frames,
+        }
+
+        near_plane = first_frame.get("near")
+        far_plane = first_frame.get("far")
+        if near_plane is not None:
+            transforms["near_plane"] = near_plane
+        if far_plane is not None:
+            transforms["far_plane"] = far_plane
+
+        if metadata_override:
+            transforms.update(metadata_override)
+
+        (root / "transforms.json").write_text(json.dumps(transforms, indent=2))
 
     def export_dataset(
         self,
-        image_sequence: torch.Tensor,
+        images: torch.Tensor,
         trajectory: Dict[str, Any],
         output_dir: str,
-        depth_sequence: Optional[torch.Tensor] = None,
-        depth_format: str = "npy",
+        depth_maps: Optional[torch.Tensor] = None,
         metadata_json: str = "{}",
-    ):
-        frames_meta = trajectory.get("frames", [])
-        if not frames_meta:
-            raise ValueError("Trajectory payload is missing 'frames'.")
+    ) -> tuple[str]:
+        dataset_path = Path(output_dir.replace("${output_dir}", str(Path.cwd() / "output"))).expanduser().resolve()
+        dataset_path.mkdir(parents=True, exist_ok=True)
 
-        images = self._to_frame_list(image_sequence)
-        depths = self._to_depth_list(depth_sequence)
-        if depths and len(depths) != len(images):
-            raise ValueError("Depth sequence length does not match image sequence length.")
+        rgb_frames = self._normalize_frames(images)
+        self._write_rgb(rgb_frames, dataset_path)
 
-        if len(images) != len(frames_meta):
-            raise ValueError(
-                f"Frame count mismatch: {len(images)} images vs {len(frames_meta)} trajectory entries."
-            )
+        has_depth = depth_maps is not None
+        if has_depth:
+            depth_tensor = depth_maps
+            if depth_tensor.ndim == 3:
+                depth_tensor = depth_tensor.unsqueeze(-1)
+            depth_frames = self._normalize_frames(depth_tensor)
+            if depth_frames.shape[0] != rgb_frames.shape[0]:
+                raise ValueError("depth_maps frame count does not match RGB frames")
+            if depth_frames.shape[-1] == 1:
+                depth_frames = depth_frames[..., 0]
+            self._write_depth(depth_frames, dataset_path)
 
-        width = int(frames_meta[0].get("width", images[0].shape[-1]))
-        height = int(frames_meta[0].get("height", images[0].shape[-2]))
-        intrinsics_matrix = frames_meta[0].get("intrinsics")
-        if intrinsics_matrix is None:
-            raise ValueError("Trajectory frame missing intrinsics matrix.")
-        intrinsics = {
-            "fl_x": float(intrinsics_matrix[0][0]),
-            "fl_y": float(intrinsics_matrix[1][1]),
-            "cx": float(intrinsics_matrix[0][2]),
-            "cy": float(intrinsics_matrix[1][2]),
-        }
-
-        fps = int(trajectory.get("fps", 24))
-        try:
-            extra_metadata = json.loads(metadata_json or "{}")
-        except json.JSONDecodeError as exc:
-            raise ValueError(f"metadata_json is not valid JSON: {exc}")
-
-        payloads: List[FramePayload] = []
-        for idx, image in enumerate(images):
-            depth_tensor = depths[idx] if depths else None
-            payloads.append(FramePayload(rgb=image, depth=depth_tensor, metadata=frames_meta[idx]))
-
-        output_path = Path(output_dir.replace("${output_dir}", str(Path.cwd() / "output"))).expanduser().resolve()
-        dataset_dir = write_dataset(
-            output_dir=output_path,
-            frames=payloads,
-            width=width,
-            height=height,
-            intrinsics=intrinsics,
-            fps=fps,
-            depth_format=depth_format,
-        )
-
-        if extra_metadata:
-            transforms_path = dataset_dir / "transforms.json"
-            transforms_payload = json.loads(transforms_path.read_text())
-            transforms_payload.update(extra_metadata)
-            transforms_path.write_text(json.dumps(transforms_payload, indent=2))
-
-        return (str(dataset_dir),)
+        extra = json.loads(metadata_json or "{}")
+        self._write_transforms(trajectory, dataset_path, has_depth, extra)
+        return (str(dataset_path),)
 
 
-NODE_CLASS_MAPPINGS: Dict[str, Any] = {
+NODE_CLASS_MAPPINGS = {
     "Cosmos_Gen3C_InferExport": CosmosGen3CInferExport,
 }
 

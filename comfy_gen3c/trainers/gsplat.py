@@ -25,7 +25,7 @@ else:
 @dataclass
 class FrameRecord:
     rgb: torch.Tensor  # (C, H, W)
-    depth: torch.Tensor  # (H, W)
+    depth: Optional[torch.Tensor]  # (H, W) or None
     camera_to_world: torch.Tensor  # (4, 4)
     world_to_camera: torch.Tensor  # (4, 4)
     width: int
@@ -90,6 +90,59 @@ def _invert(matrix: torch.Tensor) -> torch.Tensor:
     return torch.linalg.inv(matrix)
 
 
+def _generate_fallback_points(
+    frames: List[FrameRecord],
+    fx: float,
+    fy: float,
+    cx: float,
+    cy: float,
+    points_per_frame: int,
+    near_plane: float,
+    far_plane: float,
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    if not frames or points_per_frame <= 0:
+        empty = torch.empty((0, 3), dtype=torch.float32)
+        return empty, empty
+
+    fallback_points: List[torch.Tensor] = []
+    fallback_colors: List[torch.Tensor] = []
+    near = max(float(near_plane), 1e-4)
+    far = max(float(far_plane), near + 1e-3)
+    far = max(min(far, near * 1024.0), near + 1e-3)
+
+    for frame in frames:
+        h, w = frame.height, frame.width
+        if h <= 0 or w <= 0:
+            continue
+        sample_count = min(points_per_frame, h * w)
+        if sample_count <= 0:
+            continue
+
+        ys = torch.randint(0, h, (sample_count,), dtype=torch.int64)
+        xs = torch.randint(0, w, (sample_count,), dtype=torch.int64)
+
+        colors = frame.rgb[:, ys, xs].permute(1, 0)
+
+        depths = torch.rand(sample_count, dtype=torch.float32) * (far - near) + near
+
+        x = (xs.to(torch.float32) - cx) / fx * depths
+        y = (ys.to(torch.float32) - cy) / fy * depths
+        ones = torch.ones_like(depths)
+        cam_points = torch.stack([x, y, depths, ones], dim=-1)
+        world = (cam_points @ frame.camera_to_world.to(torch.float32).T)[:, :3]
+
+        fallback_points.append(world)
+        fallback_colors.append(colors)
+
+    if not fallback_points:
+        empty = torch.empty((0, 3), dtype=torch.float32)
+        return empty, empty
+
+    points = torch.cat(fallback_points, dim=0)
+    colors = torch.cat(fallback_colors, dim=0)
+    return points, colors
+
+
 def _prepare_points(
     frames: List[FrameRecord],
     fx: float,
@@ -98,14 +151,23 @@ def _prepare_points(
     cy: float,
     points_per_frame: int,
     device: torch.device,
-) -> Tuple[torch.Tensor, torch.Tensor]:
+    near_plane: float,
+    far_plane: float,
+) -> Tuple[torch.Tensor, torch.Tensor, bool]:
     point_list: List[torch.Tensor] = []
     color_list: List[torch.Tensor] = []
+    fallback_candidates: List[FrameRecord] = []
 
     for frame in frames:
         depth = frame.depth
+        if depth is None:
+            fallback_candidates.append(frame)
+            continue
+
+        depth = depth.to(torch.float32)
         mask = depth > 0.0
         if not torch.any(mask):
+            fallback_candidates.append(frame)
             continue
 
         h, w = depth.shape
@@ -123,8 +185,8 @@ def _prepare_points(
         z = depth_masked
 
         ones = torch.ones_like(z)
-        cam_points = torch.stack([x, y, z, ones], dim=-1)  # (N, 4)
-        world_points = (cam_points @ frame.camera_to_world.T)[:, :3]
+        cam_points = torch.stack([x, y, z, ones], dim=-1)
+        world_points = (cam_points @ frame.camera_to_world.to(torch.float32).T)[:, :3]
 
         colors = frame.rgb.permute(1, 2, 0)[mask].reshape(-1, 3)
 
@@ -137,12 +199,31 @@ def _prepare_points(
         point_list.append(world_points)
         color_list.append(colors)
 
+    fallback_used = False
+    if fallback_candidates:
+        fallback_points, fallback_colors = _generate_fallback_points(
+            fallback_candidates,
+            fx,
+            fy,
+            cx,
+            cy,
+            points_per_frame,
+            near_plane,
+            far_plane,
+        )
+        if fallback_points.numel() > 0:
+            point_list.append(fallback_points)
+            color_list.append(fallback_colors)
+            fallback_used = True
+
     if not point_list:
-        raise RuntimeError("No valid depth samples found in dataset.")
+        raise RuntimeError(
+            "No valid depth samples found in dataset and fallback initialisation failed."
+        )
 
     points = torch.cat(point_list, dim=0).to(device)
     colors = torch.cat(color_list, dim=0).to(device)
-    return points, colors
+    return points, colors, fallback_used
 
 
 def _normalize_quaternions(quat: torch.Tensor) -> torch.Tensor:
@@ -263,21 +344,28 @@ class SplatTrainerGsplat:
 
         width = int(transforms["w"])
         height = int(transforms["h"])
+        near_plane = float(transforms.get("near_plane", 0.1))
+        far_plane = float(transforms.get("far_plane", max(near_plane + 1.0, 10.0)))
+        if far_plane <= near_plane:
+            far_plane = near_plane + 1.0
 
         frames: List[FrameRecord] = []
+        missing_depth_frames = 0
         for frame_entry in transforms["frames"]:
             rgb_path = dataset_path / frame_entry["file_path"]
             if not rgb_path.exists():
                 raise FileNotFoundError(f"Missing RGB frame at '{rgb_path}'.")
             rgb_tensor = _load_image(rgb_path)
 
+            depth_tensor: Optional[torch.Tensor] = None
             depth_path_entry = frame_entry.get("depth_path")
-            if depth_path_entry is None:
-                raise ValueError("All frames require depth maps for gsplat training.")
-            depth_path = dataset_path / depth_path_entry
-            if not depth_path.exists():
-                raise FileNotFoundError(f"Missing depth frame at '{depth_path}'.")
-            depth_tensor = _load_depth(depth_path, depth_scale)
+            if depth_path_entry is not None:
+                depth_path = dataset_path / depth_path_entry
+                if not depth_path.exists():
+                    raise FileNotFoundError(f"Missing depth frame at '{depth_path}'.")
+                depth_tensor = _load_depth(depth_path, depth_scale)
+            else:
+                missing_depth_frames += 1
 
             cam_to_world = torch.tensor(
                 frame_entry["transform_matrix"], dtype=torch.float32
@@ -308,7 +396,7 @@ class SplatTrainerGsplat:
                 path_parts.insert(0, extra)
         os.environ["PATH"] = os.pathsep.join(path_parts)
 
-        points, colors = _prepare_points(
+        points, colors, used_fallback = _prepare_points(
             frames,
             fx=fx,
             fy=fy,
@@ -316,7 +404,17 @@ class SplatTrainerGsplat:
             cy=cy,
             points_per_frame=points_per_frame,
             device=torch_device,
+            near_plane=near_plane,
+            far_plane=far_plane,
         )
+
+        if used_fallback:
+            if missing_depth_frames > 0:
+                print(
+                    f"[gsplat] Using fallback point initialisation for {missing_depth_frames} frame(s) without depth maps."
+                )
+            else:
+                print("[gsplat] Using fallback point initialisation because available depth maps had no valid samples.")
 
         num_points = points.shape[0]
         if num_points == 0:
