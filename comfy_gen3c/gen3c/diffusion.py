@@ -83,54 +83,39 @@ class Gen3CDiffusion:
         scheduler: str,
         denoise: float = 1.0,
     ) -> Tuple[Dict[str, torch.Tensor], torch.Tensor, Dict[str, Any]]:  # pragma: no cover - heavy runtime
+        from .sampler import sample_cosmos, SamplingConfig
+
         if lyra_model.clip is None:
             raise RuntimeError("Loaded GEN3C bundle is missing a CLIP text encoder.")
         frames_meta = camera_trajectory.get("frames", [])
         if not frames_meta:
             raise ValueError("camera_trajectory is missing frame metadata. Use Gen3C_CameraTrajectory upstream.")
 
-        width = int(frames_meta[0].get("width", 1024))
-        height = int(frames_meta[0].get("height", 576))
-        frame_count = len(frames_meta)
-        fps = float(camera_trajectory.get("fps", 24))
-
-        model = lyra_model.model.clone()
-        latent_format = model.get_model_object("latent_format")
-        channels = getattr(latent_format, "latent_channels", 16)
-
-        latent_dtype = torch.float32 if lyra_model.device == "cpu" else lyra_model.dtype
-        latent = self._prepare_latent(width, height, frame_count, channels, latent_dtype)
-        latent_dict: Dict[str, torch.Tensor] = {"samples": latent}
-
-        positive = self._encode_prompt(lyra_model.clip, prompt or "", fps)
-        negative = self._encode_prompt(lyra_model.clip, negative_prompt or "", fps)
-        if not positive:
-            raise RuntimeError("Failed to encode prompt with CLIP.")
-        if not negative:
-            negative = self._encode_prompt(lyra_model.clip, "", fps)
-
-        latent_image = comfy.sample.fix_empty_latent_channels(model, latent_dict["samples"])
-        noise = comfy.sample.prepare_noise(latent_image, seed, None)
-        noise_mask = latent_dict.get("noise_mask")
-
-        samples = comfy.sample.sample(
-            model,
-            noise,
-            num_inference_steps,
-            guidance_scale,
-            sampler_name,
-            scheduler,
-            positive,
-            negative,
-            latent_image,
-            denoise=denoise,
-            noise_mask=noise_mask,
-            seed=seed,
+        # Create sampling configuration
+        sampling_config = SamplingConfig(
+            steps=num_inference_steps,
+            guidance_scale=guidance_scale,
+            num_views=len(frames_meta)
         )
 
-        latent_out = latent_dict.copy()
-        latent_out["samples"] = samples.to(torch.device("cpu"))
-        images = self._decode_to_images(lyra_model, latent_out["samples"])
+        # Use the enhanced sample_cosmos function with trajectory injection
+        result = sample_cosmos(
+            bundle=lyra_model,
+            trajectory=camera_trajectory,
+            prompt=prompt,
+            negative_prompt=negative_prompt,
+            seed=seed,
+            sampling=sampling_config,
+            sampler_name=sampler_name,
+            scheduler=scheduler,
+            denoise=denoise,
+        )
+
+        # Extract samples and decode to images
+        samples = result["samples"]
+        latent_out = {"samples": samples}
+        images = self._decode_to_images(lyra_model, samples)
+
         return (latent_out, images, camera_trajectory)
 
 

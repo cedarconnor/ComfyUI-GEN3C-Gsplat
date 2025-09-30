@@ -1,0 +1,148 @@
+{
+  "workflow_name": "Quality Control Pipeline",
+  "description": "Comprehensive quality assessment and filtering for GEN3C datasets",
+  "nodes": [
+    {
+      "id": 1,
+      "type": "LoadDatasetPath",
+      "pos": [100, 100],
+      "inputs": {
+        "dataset_path": "${input_dir}/my_dataset"
+      },
+      "outputs": ["dataset_path"]
+    },
+    {
+      "id": 2,
+      "type": "LoadTrajectoryJSON",
+      "pos": [100, 200],
+      "inputs": {
+        "trajectory_file": "${input_dir}/my_dataset/transforms.json"
+      },
+      "outputs": ["trajectory"]
+    },
+    {
+      "id": 3,
+      "type": "Gen3C_DatasetValidator",
+      "pos": [300, 100],
+      "inputs": {
+        "dataset_path": ["node:1", "dataset_path"],
+        "min_frames": 3,
+        "max_frames": 1000,
+        "generate_report": true
+      },
+      "outputs": ["quality_score", "validation_status", "issues", "stats"]
+    },
+    {
+      "id": 4,
+      "type": "Gen3C_TrajectoryQualityAnalysis",
+      "pos": [300, 250],
+      "inputs": {
+        "trajectory": ["node:2", "trajectory"]
+      },
+      "outputs": ["overall_score", "smoothness", "coverage", "baseline_quality", "rotation_diversity", "analysis_report"]
+    },
+    {
+      "id": 5,
+      "type": "Gen3C_TrajectoryPreview",
+      "pos": [500, 100],
+      "inputs": {
+        "trajectory": ["node:2", "trajectory"],
+        "plot_type": "all",
+        "output_dir": "${output_dir}/quality_analysis/trajectory"
+      },
+      "outputs": ["preview_image", "output_path"]
+    },
+    {
+      "id": 6,
+      "type": "Gen3C_QualityFilter",
+      "pos": [500, 300],
+      "inputs": {
+        "dataset_path": ["node:1", "dataset_path"],
+        "trajectory": ["node:2", "trajectory"],
+        "quality_threshold": 0.6,
+        "min_blur_threshold": 0.4,
+        "min_brightness": 0.2,
+        "max_brightness": 0.8
+      },
+      "outputs": ["filtered_trajectory", "filter_report", "frames_kept", "frames_removed"]
+    },
+    {
+      "id": 7,
+      "type": "Gen3C_DatasetValidator",
+      "pos": [700, 200],
+      "inputs": {
+        "dataset_path": ["node:1", "dataset_path"],
+        "generate_report": true
+      },
+      "outputs": ["quality_score_filtered", "validation_status_filtered", "issues_filtered", "stats_filtered"]
+    },
+    {
+      "id": 8,
+      "type": "SaveQualityReport",
+      "pos": [900, 150],
+      "inputs": {
+        "original_score": ["node:3", "quality_score"],
+        "filtered_score": ["node:7", "quality_score_filtered"],
+        "trajectory_analysis": ["node:4", "analysis_report"],
+        "filter_report": ["node:6", "filter_report"],
+        "output_path": "${output_dir}/quality_analysis/complete_report.txt"
+      },
+      "outputs": ["report_path"]
+    }
+  ],
+  "quality_gates": [
+    {
+      "name": "dataset_structure_check",
+      "condition": "node:3.validation_status == 'PASSED'",
+      "action": "continue",
+      "failure_action": "abort_with_message:Dataset structure validation failed"
+    },
+    {
+      "name": "trajectory_quality_check",
+      "condition": "node:4.overall_score > 0.3",
+      "action": "continue",
+      "failure_action": "show_warning:Low trajectory quality detected"
+    },
+    {
+      "name": "sufficient_frames_check",
+      "condition": "node:6.frames_kept > 10",
+      "action": "continue",
+      "failure_action": "abort_with_message:Too few frames after quality filtering"
+    }
+  ],
+  "recommendations": {
+    "low_trajectory_smoothness": {
+      "condition": "node:4.smoothness < 0.4",
+      "message": "Consider smoothing trajectory or increasing frame rate"
+    },
+    "poor_view_coverage": {
+      "condition": "node:4.coverage < 0.3",
+      "message": "Increase camera movement range for better reconstruction"
+    },
+    "high_frame_removal": {
+      "condition": "node:6.frames_removed / (node:6.frames_kept + node:6.frames_removed) > 0.5",
+      "message": "High frame removal rate - check lighting and focus conditions"
+    },
+    "low_baseline_quality": {
+      "condition": "node:4.baseline_quality < 0.4",
+      "message": "Camera baselines may be too small or inconsistent"
+    }
+  },
+  "notes": [
+    "This pipeline provides comprehensive quality control:",
+    "",
+    "1. Load and validate dataset structure",
+    "2. Analyze trajectory quality metrics",
+    "3. Generate trajectory visualizations",
+    "4. Filter low-quality frames",
+    "5. Re-validate filtered dataset",
+    "6. Generate comprehensive quality report",
+    "",
+    "Quality Gates:",
+    "- Structural validation must pass",
+    "- Trajectory score > 0.3",
+    "- Minimum 10 frames after filtering",
+    "",
+    "Use this before training to ensure optimal results."
+  ]
+}

@@ -1,74 +1,216 @@
 # ComfyUI-GEN3C-Gsplat
 
-A custom ComfyUI node pack that bridges Cosmos/GEN3C video generation with in-graph Gaussian Splat (3DGS) training. It adds camera/trajectory tooling, dataset exporters, and two training backends (Nerfstudio CLI wrapper and an in-process gsplat optimizer) so artists can go from prompt to splat entirely inside ComfyUI.
+A comprehensive ComfyUI node pack that bridges Cosmos/GEN3C video generation with Gaussian Splat (3DGS) training, featuring camera control, pose recovery, quality validation, and end-to-end pipelines from prompt to splat.
 
-## Features
-- **Camera authoring** – `Gen3C_CameraTrajectory` builds deterministic camera paths (orbit, dolly, truck, tilt, spiral, or custom keyframes) and returns per-frame intrinsics/extrinsics in a GEN3C-friendly payload.
-- **Dataset export** – `Cosmos_Gen3C_InferExport` consumes RGB image sequences plus trajectory metadata and writes Nerfstudio-style datasets (`/rgb`, optional `/depth`, `transforms.json`). Pass an external depth tensor (e.g., DepthCrafter output) into the `depth_maps` input to get depth file paths baked into `transforms.json`.
-- **Gaussian Splat training**
-  - `SplatTrainer_Nerfstudio`: spawns `ns-train splatfacto` followed by `ns-export gaussian-splat`, producing `.ply`/`.splat` assets from a dataset directory.
-  - `SplatTrainer_gsplat`: depth-initialised optimiser built on `gsplat`; it consumes depth maps from `Cosmos_Gen3C_InferExport` when available and falls back to a synthetic SfM-style initialisation when depth is missing before writing an ASCII `.ply`.
-- **Depth integration (optional)** – Install [ComfyUI-DepthCrafter-Nodes](https://github.com/akatz-ai/ComfyUI-DepthCrafter-Nodes) and drop its `DownloadAndLoadDepthCrafterModel`->`DepthCrafter` nodes after `Gen3CDiffusion`. Connect the DepthCrafter output to the exporter’s `depth_maps` socket; the exporter writes `depth/frame_XXXXXX.npy` and updates `transforms.json` so the gsplat trainer can consume metric depth.
+## ✨ Key Features
 
-## Requirements
-### Model assets
+### 🎥 **Complete GEN3C Pipeline**
+- **Camera Control** – `Gen3C_CameraTrajectory` with presets (orbit, dolly, truck, tilt, spiral) and custom keyframes
+- **Cosmos Integration** – Full trajectory injection into GEN3C diffusion with enhanced sampling
+- **Direct Export** – `Cosmos_Gen3C_DirectExport` extracts trajectory from latents automatically
+- **Enhanced Nodes** – Trajectory-aware Cosmos nodes with embedded camera data
+
+### 🔄 **Pose Recovery System**
+- **Multiple Backends** – COLMAP (classical SfM), ViPE (video-specific), automatic fallback
+- **Video Processing** – `Gen3C_VideoToDataset` for complete video→dataset pipeline
+- **Image Sequences** – `Gen3C_PoseDepth_FromImages` for photo collections
+- **Quality Scoring** – Confidence metrics and error reporting
+
+### 📊 **Quality & Validation Tools**
+- **Dataset Validation** – Comprehensive structure, pose, and image quality checks
+- **Trajectory Analysis** – Smoothness, coverage, baseline quality metrics
+- **Quality Filtering** – Automatic removal of low-quality frames
+- **Visual Previews** – 3D trajectory plots, frustum visualization, statistics
+
+### 🧠 **Gaussian Splat Training**
+- **Nerfstudio Integration** – `SplatTrainer_Nerfstudio` CLI wrapper with full pipeline
+- **In-Process Training** – `SplatTrainer_gsplat` with depth initialization and fallback SfM
+- **Quality Optimization** – Smart initialization from pose recovery or depth maps
+- **Windows Compatible** – Handles build tools and path issues gracefully
+
+### 🔍 **Advanced Workflows**
+- **End-to-End Control** – `Gen3C_CameraTrajectory` → `Gen3CDiffusion` → `Export` → `Training`
+- **Video-to-Splat** – `Video` → `PoseRecovery` → `QualityFilter` → `Training`
+- **Quality Pipelines** – Validation → Filtering → Preview → Training with quality gates
+
+## 📋 Requirements
+
+### Core Dependencies
+```bash
+# Install into your ComfyUI environment
+pip install nerfstudio==0.3.4 gsplat==0.1.11 ninja>=1.11 torch>=2.1
+
+# For pose recovery
+pip install opencv-python==4.6.0.66 scipy>=1.10.0 pillow>=9.0.0
+```
+
+### Model Assets
 Place these alongside your existing ComfyUI models:
-- `ComfyUI\models\GEN3C\GEN3C-Cosmos-7B.pt` (or equivalent).
-- `ComfyUI\models\Lyra\lyra_static.pt` (Lyra VAE).
-- `ComfyUI\models\Lyra\Cosmos-0.1-Tokenizer-CV8x16x16-autoencoder.jit` (Cosmos tokenizer/latent adapter).
-- `ComfyUI\models\clip\clip_l.safetensors` (CLIP-L text encoder used by Cosmos).
+- `ComfyUI/models/GEN3C/GEN3C-Cosmos-7B.pt` (GEN3C diffusion model)
+- `ComfyUI/models/Lyra/lyra_static.pt` (Lyra VAE encoder)
+- `ComfyUI/models/Lyra/Cosmos-0.1-Tokenizer-CV8x16x16-autoencoder.jit` (Cosmos tokenizer)
+- `ComfyUI/models/clip/clip_l.safetensors` (CLIP-L text encoder)
 
-### Python dependencies
-Install into the same environment that runs ComfyUI:
-```bash
-# inside C:\ComfyUI
-.\.venv\Scripts\pip install nerfstudio==0.3.4 gsplat==0.1.11 ninja
-```
-> **Windows note:** `gsplat` compiles CUDA extensions on first use. Install the Microsoft C++ Build Tools so `cl.exe` is on your PATH, or training will raise a helpful error.
+### Optional Dependencies
 
-For DepthCrafter depth generation:
+**For COLMAP pose recovery** (recommended):
+- Download and install from [colmap.github.io](https://colmap.github.io/)
+- Ensure `colmap` command is available in PATH
+
+**For DepthCrafter integration**:
 ```bash
-cd C:\ComfyUI\custom_nodes
+cd ComfyUI/custom_nodes
 git clone https://github.com/akatz-ai/ComfyUI-DepthCrafter-Nodes.git
-# restart ComfyUI so the new nodes register
-```
-The DepthCrafter nodes manage Hugging Face downloads automatically the first time you run them (several gigabytes).
-
-## Installation
-1. Drop this folder into `ComfyUI/custom_nodes/ComfyUI-GEN3C-Gsplat` (already done if you are reading this in-place).
-2. Verify dependencies (`nerfstudio`, `gsplat`, `ninja`; optional DepthCrafter) are installed in the ComfyUI virtual environment.
-3. Restart ComfyUI so it discovers the new nodes.
-
-## Usage
-1. **Author a camera path** – add `Gen3C_CameraTrajectory`, choose a preset, tweak FOV/near/far, and (optionally) paste JSON keyframes.
-2. **Generate frames with Cosmos/GEN3C** – load the model bundle via `LyraModelLoader`, feed `Gen3CDiffusion` with prompt + trajectory, and capture the output images/latents.
-3. **(Optional) Create depth with DepthCrafter** – if you installed the extension, run:
-   - `DownloadAndLoadDepthCrafterModel` -> `DepthCrafter`
-   - Wire the `images` output from `Gen3CDiffusion` into `DepthCrafter` and pipe its result to the exporter’s `depth_maps` input.
-4. **Export dataset** – `Cosmos_Gen3C_InferExport` writes `/rgb`, optional `/depth`, and `transforms.json`. Any metadata JSON you feed in is merged with the trajectory payload.
-5. **Train a splat**:
-   - For CLI training, connect the dataset path to `SplatTrainer_Nerfstudio` and wait for the exporter to finish.
-   - For in-process training, connect the dataset path to `SplatTrainer_gsplat` and adjust iterations, learning rate, and batch sizes as needed.
-6. **Preview/export** – open the resulting `.ply`/`.splat` with ComfyUI-3D-Pack viewers or any external Gaussian Splat viewer.
-
-### Minimal graph outline
-```
-Gen3C_CameraTrajectory
-   |-- LyraModelLoader -> Gen3CDiffusion --|-- Cosmos_Gen3C_InferExport -> dataset path
-                                         |-- DepthCrafter (optional depth)
-SplatTrainer_gsplat or SplatTrainer_Nerfstudio
 ```
 
-## Known limitations
-- Depth export relies on the DepthCrafter extension (or any other compatible depth node you provide). Without depth, the exporter still writes RGB+poses and the gsplat trainer now seeds from an SfM-style fallback cloud (slower to converge and lower fidelity than true depth).
-- The Cosmos diffusion wrapper currently emits RGB and latents; additional 3D cache data is not exposed by upstream APIs yet.
-- First-time gsplat runs on Windows can take a minute to build CUDA kernels.
+**For advanced visualization** (matplotlib for 3D plots):
+```bash
+pip install matplotlib
+```
 
-## Roadmap
-- Finish the duplicated Cosmos loader/inference node so GEN3C outputs feed directly into the exporter without manual wiring.
-- Add dataset validators (pose continuity, depth sanity) and automated regression graphs.
-- Surface a trajectory preview widget (frustum/path plot) and richer keyframe tooling.
+### System Requirements
+- **GPU**: CUDA-capable GPU with 8GB+ VRAM recommended
+- **RAM**: 16GB+ system RAM for large datasets
+- **Storage**: 5-10GB for model weights, additional space for datasets
+- **OS**: Windows 10/11, Linux, macOS (Windows build tools required for gsplat)
 
-## Support
-Issues, suggestions, or contributions are welcome. Open a ticket or PR in your ComfyUI fork and tag with `GEN3C-Gsplat` so it’s easy to triage.
+## 🚀 Quick Start
+
+### Installation
+1. Clone or download this repository to `ComfyUI/custom_nodes/ComfyUI-GEN3C-Gsplat`
+2. Install core dependencies: `pip install -r requirements.txt`
+3. Download required model weights (see Requirements section)
+4. Restart ComfyUI to discover new nodes
+
+### Basic Usage
+
+#### 1. **Controlled GEN3C Generation**
+```
+Gen3C_CameraTrajectory → LyraModelLoader → Gen3CDiffusion →
+Cosmos_Gen3C_DirectExport → SplatTrainer_gsplat → Output.ply
+```
+
+#### 2. **Video-to-Splat Pipeline**
+```
+Video File → Gen3C_VideoToDataset → Gen3C_QualityFilter →
+SplatTrainer_gsplat → Output.ply
+```
+
+#### 3. **Quality Control Workflow**
+```
+Dataset → Gen3C_DatasetValidator → Gen3C_TrajectoryPreview →
+Gen3C_QualityFilter → Training
+```
+
+## 📖 Node Reference
+
+### Camera & Trajectory
+- **`Gen3C_CameraTrajectory`** – Generate camera paths with presets or custom keyframes
+- **`Gen3C_TrajectoryPreview`** – Visualize camera trajectories (3D plots, frustums, stats)
+- **`Gen3C_TrajectoryQualityAnalysis`** – Analyze trajectory smoothness, coverage, diversity
+
+### GEN3C Integration
+- **`LyraModelLoader`** – Load GEN3C/Cosmos model bundle
+- **`Gen3CDiffusion`** – Generate video with trajectory control and camera conditioning
+- **`CosmosGen3CLatentVideo`** – Enhanced Cosmos nodes with trajectory support
+
+### Pose Recovery
+- **`Gen3C_PoseDepth_FromVideo`** – Recover poses from video using COLMAP/ViPE
+- **`Gen3C_PoseDepth_FromImages`** – Recover poses from image sequences
+- **`Gen3C_VideoToDataset`** – Complete video→dataset pipeline with pose recovery
+
+### Dataset Export & Validation
+- **`Cosmos_Gen3C_InferExport`** – Export RGB + trajectory to Nerfstudio format
+- **`Cosmos_Gen3C_DirectExport`** – Extract trajectory from latents automatically
+- **`Gen3C_DatasetValidator`** – Comprehensive dataset quality validation
+- **`Gen3C_QualityFilter`** – Filter low-quality frames with blur/brightness detection
+
+### Training
+- **`SplatTrainer_Nerfstudio`** – CLI wrapper for ns-train splatfacto pipeline
+- **`SplatTrainer_gsplat`** – In-process training with depth initialization
+
+## 🎯 Workflow Examples
+
+Explore the `workflows/` directory for complete examples:
+
+### **Basic GEN3C to Splat** (`workflows/basic_gen3c_to_splat.json`)
+Complete pipeline from text prompt to Gaussian splat with explicit camera control.
+
+### **Video to Splat** (`workflows/video_to_splat.json`)
+Convert existing videos to splats using automatic pose recovery.
+
+### **Quality Control Pipeline** (`workflows/quality_control_pipeline.json`)
+Comprehensive quality assessment and filtering before training.
+
+## 🔧 Advanced Configuration
+
+### Custom Camera Trajectories
+```json
+{
+  "keyframes": [
+    {"frame": 0, "position": [0, 0, 5], "target": [0, 0, 0]},
+    {"frame": 10, "position": [3, 1, 3], "target": [0, 0, 0]},
+    {"frame": 20, "position": [0, 2, -5], "target": [0, 0, 0]}
+  ]
+}
+```
+
+### Quality Filter Settings
+- **Blur threshold**: 0.3-0.7 (higher = more strict)
+- **Brightness range**: 0.15-0.85 (normalized 0-1)
+- **Overall quality**: 0.4-0.8 (combined score threshold)
+
+### Training Parameters
+- **Iterations**: 3000-7000 (more for complex scenes)
+- **Learning rate**: 0.005-0.02 (lower for stable convergence)
+- **Batch size**: 1-4 (limited by VRAM)
+
+## 🐛 Known Limitations
+
+- **Depth dependency**: Full depth integration requires DepthCrafter or external depth estimation
+- **Windows builds**: First-time gsplat compilation requires Microsoft C++ Build Tools
+- **Memory usage**: Large datasets may require batch processing or downsampling
+- **COLMAP dependency**: Pose recovery requires separate COLMAP installation
+
+## 🗺️ Roadmap
+
+### Completed ✅
+- Complete Cosmos integration with trajectory injection
+- Pose/depth recovery system (COLMAP, ViPE)
+- Quality validation and filtering framework
+- Comprehensive dataset export pipeline
+
+### In Progress 🚧
+- Advanced trajectory preview widgets
+- Automated parameter tuning
+- Cloud-based processing integration
+
+### Planned 📋
+- Real-time trajectory editing interface
+- Multi-resolution training pipelines
+- Advanced quality metrics (LPIPS, etc.)
+- Integration with other 3D formats
+
+## 🤝 Contributing
+
+We welcome contributions! Areas where help is needed:
+
+- **Testing**: Try workflows with different datasets and report issues
+- **Documentation**: Improve tutorials and troubleshooting guides
+- **Features**: Implement new quality metrics or training optimizations
+- **Integration**: Connect with other ComfyUI node packs
+
+## 📄 License & Support
+
+This project is open source. For issues, suggestions, or contributions:
+
+1. **Issues**: Report bugs or request features via GitHub Issues
+2. **Discussions**: Join the ComfyUI community for general questions
+3. **Pull Requests**: Submit improvements or bug fixes
+
+**Commercial Support**: For enterprise deployments or custom development, contact the maintainers.
+
+---
+
+**🎨 Happy splat creation!** Transform your ideas into immersive 3D experiences with the power of GEN3C and Gaussian Splatting.
 

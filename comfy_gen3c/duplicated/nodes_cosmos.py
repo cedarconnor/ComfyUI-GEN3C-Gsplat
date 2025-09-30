@@ -1,4 +1,5 @@
 from typing_extensions import override
+from typing import Any, Dict, Optional, Tuple
 import nodes
 import torch
 import comfy.model_management
@@ -129,6 +130,110 @@ class CosmosPredict2ImageToVideoLatent(io.ComfyNode):
         return io.NodeOutput(out_latent)
 
 
+class CosmosGen3CLatentVideo(io.ComfyNode):
+    """Enhanced Cosmos latent video node with GEN3C trajectory support."""
+
+    @classmethod
+    def define_schema(cls) -> io.Schema:
+        return io.Schema(
+            node_id="CosmosGen3CLatentVideo",
+            category="latent/video",
+            inputs=[
+                io.Int.Input("width", default=1280, min=16, max=nodes.MAX_RESOLUTION, step=16),
+                io.Int.Input("height", default=704, min=16, max=nodes.MAX_RESOLUTION, step=16),
+                io.Int.Input("length", default=121, min=1, max=nodes.MAX_RESOLUTION, step=8),
+                io.Int.Input("batch_size", default=1, min=1, max=4096),
+                io.Dict.Input("camera_trajectory", optional=True),  # GEN3C_TRAJECTORY type
+            ],
+            outputs=[io.Latent.Output()],
+        )
+
+    @classmethod
+    def execute(cls, width, height, length, batch_size=1, camera_trajectory=None) -> io.NodeOutput:
+        # If trajectory is provided, use its frame count and dimensions
+        if camera_trajectory:
+            frames_meta = camera_trajectory.get("frames", [])
+            if frames_meta:
+                length = len(frames_meta)
+                width = int(frames_meta[0].get("width", width))
+                height = int(frames_meta[0].get("height", height))
+
+        latent = torch.zeros([batch_size, 16, ((length - 1) // 8) + 1, height // 8, width // 8],
+                           device=comfy.model_management.intermediate_device())
+
+        latent_dict = {"samples": latent}
+
+        # Add trajectory conditioning if provided
+        if camera_trajectory:
+            latent_dict["camera_trajectory"] = camera_trajectory
+
+        return io.NodeOutput(latent_dict)
+
+
+class CosmosGen3CImageToVideoLatent(io.ComfyNode):
+    """Enhanced Cosmos image-to-video node with GEN3C trajectory support."""
+
+    @classmethod
+    def define_schema(cls) -> io.Schema:
+        return io.Schema(
+            node_id="CosmosGen3CImageToVideoLatent",
+            category="conditioning/inpaint",
+            inputs=[
+                io.Vae.Input("vae"),
+                io.Int.Input("width", default=1280, min=16, max=nodes.MAX_RESOLUTION, step=16),
+                io.Int.Input("height", default=704, min=16, max=nodes.MAX_RESOLUTION, step=16),
+                io.Int.Input("length", default=121, min=1, max=nodes.MAX_RESOLUTION, step=8),
+                io.Int.Input("batch_size", default=1, min=1, max=4096),
+                io.Image.Input("start_image", optional=True),
+                io.Image.Input("end_image", optional=True),
+                io.Dict.Input("camera_trajectory", optional=True),  # GEN3C_TRAJECTORY type
+            ],
+            outputs=[io.Latent.Output()],
+        )
+
+    @classmethod
+    def execute(cls, vae, width, height, length, batch_size, start_image=None, end_image=None, camera_trajectory=None) -> io.NodeOutput:
+        # If trajectory is provided, use its frame count and dimensions
+        if camera_trajectory:
+            frames_meta = camera_trajectory.get("frames", [])
+            if frames_meta:
+                length = len(frames_meta)
+                width = int(frames_meta[0].get("width", width))
+                height = int(frames_meta[0].get("height", height))
+
+        latent = torch.zeros([1, 16, ((length - 1) // 8) + 1, height // 8, width // 8],
+                           device=comfy.model_management.intermediate_device())
+
+        if start_image is None and end_image is None:
+            out_latent = {"samples": latent}
+            if camera_trajectory:
+                out_latent["camera_trajectory"] = camera_trajectory
+            return io.NodeOutput(out_latent)
+
+        mask = torch.ones([latent.shape[0], 1, ((length - 1) // 8) + 1, latent.shape[-2], latent.shape[-1]],
+                         device=comfy.model_management.intermediate_device())
+
+        if start_image is not None:
+            latent_temp = vae_encode_with_padding(vae, start_image, width, height, length, padding=1)
+            latent[:, :, :latent_temp.shape[-3]] = latent_temp
+            mask[:, :, :latent_temp.shape[-3]] *= 0.0
+
+        if end_image is not None:
+            latent_temp = vae_encode_with_padding(vae, end_image, width, height, length, padding=0)
+            latent[:, :, -latent_temp.shape[-3]:] = latent_temp
+            mask[:, :, -latent_temp.shape[-3]:] *= 0.0
+
+        out_latent = {
+            "samples": latent.repeat((batch_size, ) + (1,) * (latent.ndim - 1)),
+            "noise_mask": mask.repeat((batch_size, ) + (1,) * (mask.ndim - 1))
+        }
+
+        if camera_trajectory:
+            out_latent["camera_trajectory"] = camera_trajectory
+
+        return io.NodeOutput(out_latent)
+
+
 class CosmosExtension(ComfyExtension):
     @override
     async def get_node_list(self) -> list[type[io.ComfyNode]]:
@@ -136,6 +241,8 @@ class CosmosExtension(ComfyExtension):
             EmptyCosmosLatentVideo,
             CosmosImageToVideoLatent,
             CosmosPredict2ImageToVideoLatent,
+            CosmosGen3CLatentVideo,
+            CosmosGen3CImageToVideoLatent,
         ]
 
 

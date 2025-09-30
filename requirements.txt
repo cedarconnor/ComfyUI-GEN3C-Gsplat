@@ -1,4 +1,17 @@
+# Core dependencies for GEN3C Gaussian Splat node pack
 nerfstudio==0.3.4
 gsplat==0.1.11
 ninja>=1.11
 torch>=2.1
+
+# Pose/depth recovery dependencies
+opencv-python==4.6.0.66  # Required by nerfstudio 0.3.4
+scipy>=1.10.0
+pillow>=9.0.0
+
+# Optional dependencies for advanced pose recovery
+# colmap (install separately from https://colmap.github.io/)
+# vipe (if available)
+
+# Build tools (Windows compatibility)
+# Note: Windows users need Microsoft C++ Build Tools for gsplat compilation

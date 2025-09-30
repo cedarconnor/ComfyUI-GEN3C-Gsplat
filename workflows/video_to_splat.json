@@ -1,0 +1,109 @@
+{
+  "workflow_name": "Video to Gaussian Splat",
+  "description": "Convert existing video to Gaussian splat using pose recovery",
+  "nodes": [
+    {
+      "id": 1,
+      "type": "Gen3C_VideoToDataset",
+      "pos": [100, 100],
+      "inputs": {
+        "video_path": "input_video.mp4",
+        "output_dir": "${output_dir}/video_dataset",
+        "max_frames": 50,
+        "backend": "auto",
+        "estimate_depth": true,
+        "downsample_factor": 0.5,
+        "fps": 24
+      },
+      "outputs": ["dataset_dir", "trajectory", "confidence", "status"]
+    },
+    {
+      "id": 2,
+      "type": "Gen3C_TrajectoryQualityAnalysis",
+      "pos": [400, 100],
+      "inputs": {
+        "trajectory": ["node:1", "trajectory"]
+      },
+      "outputs": ["overall_score", "smoothness", "coverage", "baseline_quality", "rotation_diversity", "analysis_report"]
+    },
+    {
+      "id": 3,
+      "type": "Gen3C_QualityFilter",
+      "pos": [400, 300],
+      "inputs": {
+        "dataset_path": ["node:1", "dataset_dir"],
+        "trajectory": ["node:1", "trajectory"],
+        "quality_threshold": 0.4,
+        "min_blur_threshold": 0.3
+      },
+      "outputs": ["filtered_trajectory", "filter_report", "frames_kept", "frames_removed"]
+    },
+    {
+      "id": 4,
+      "type": "Gen3C_DatasetValidator",
+      "pos": [700, 200],
+      "inputs": {
+        "dataset_path": ["node:1", "dataset_dir"],
+        "generate_report": true
+      },
+      "outputs": ["quality_score", "validation_status", "issues", "stats"]
+    },
+    {
+      "id": 5,
+      "type": "Gen3C_TrajectoryPreview",
+      "pos": [700, 400],
+      "inputs": {
+        "trajectory": ["node:3", "filtered_trajectory"],
+        "plot_type": "all",
+        "output_dir": "${output_dir}/trajectory_preview"
+      },
+      "outputs": ["preview_image", "output_path"]
+    },
+    {
+      "id": 6,
+      "type": "SplatTrainer_gsplat",
+      "pos": [1000, 300],
+      "inputs": {
+        "dataset_path": ["node:1", "dataset_dir"],
+        "output_path": "${output_dir}/video_splat.ply",
+        "iterations": 5000,
+        "learning_rate": 0.01,
+        "batch_size": 1,
+        "use_depth_loss": true
+      },
+      "outputs": ["ply_path", "training_log"]
+    }
+  ],
+  "connections": [
+    {"from": "node:1.trajectory", "to": "node:2.trajectory"},
+    {"from": "node:1.dataset_dir", "to": "node:3.dataset_path"},
+    {"from": "node:1.trajectory", "to": "node:3.trajectory"},
+    {"from": "node:1.dataset_dir", "to": "node:4.dataset_path"},
+    {"from": "node:3.filtered_trajectory", "to": "node:5.trajectory"},
+    {"from": "node:1.dataset_dir", "to": "node:6.dataset_path"}
+  ],
+  "conditional_connections": [
+    {
+      "condition": "node:1.confidence > 0.3",
+      "action": "enable_node:6"
+    },
+    {
+      "condition": "node:4.quality_score < 0.5",
+      "action": "show_warning:Low dataset quality - consider using quality filter"
+    }
+  ],
+  "notes": [
+    "This workflow processes existing videos into Gaussian splats:",
+    "1. Extract frames and recover camera poses",
+    "2. Analyze trajectory quality",
+    "3. Filter low-quality frames",
+    "4. Validate final dataset",
+    "5. Generate trajectory visualization",
+    "6. Train Gaussian splat",
+    "",
+    "Requirements:",
+    "- Input video with sufficient camera motion",
+    "- COLMAP installed for pose recovery",
+    "- GPU for splat training"
+  ]
+}

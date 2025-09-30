@@ -45,10 +45,14 @@
 ## 4. Node Inventory & Status
 - [done] `Gen3C_CameraTrajectory` — presets + custom keyframes, returns structured traj JSON.
 - [done] `Cosmos_Gen3C_InferExport` — writes Nerfstudio-style datasets with derived intrinsics/depth metadata.
+- [done] `Cosmos_Gen3C_DirectExport` — enhanced exporter that extracts trajectory from Cosmos latents directly.
 - [done] `SplatTrainer_Nerfstudio` — CLI wrapper for `ns-train` + `ns-export`.
 - [done] `SplatTrainer_gsplat` — depth-initialised optimiser built on `gsplat`, now falls back to SfM seeding when depth maps are absent.
-- [in-progress] `Cosmos_Gen3C_Loader` + inference wrapper — pending duplication of native Cosmos loader so we can inject trajectories and capture depth/frames directly.
-- [todo] `Gen3C_PoseDepth_FromVideo` — placeholder stub for ViPE/pose recovery integration.
+- [done] `Gen3CDiffusion` — complete Cosmos inference with trajectory injection and camera conditioning.
+- [done] `sample_cosmos` — enhanced sampling function with trajectory encoding and camera control.
+- [done] `CosmosGen3CLatentVideo` + `CosmosGen3CImageToVideoLatent` — duplicated Cosmos nodes with embedded trajectory support.
+- [done] `Gen3C_PoseDepth_FromVideo` + `Gen3C_PoseDepth_FromImages` — complete pose/depth recovery using COLMAP and ViPE.
+- [done] `Gen3C_VideoToDataset` — end-to-end video→dataset pipeline with pose recovery.
 - [nice-to-have] Optional: trajectory preview, dataset validator, quality filters.
 
 ## 5. Dataset Schema
@@ -87,7 +91,8 @@ Depth formats supported: `npy`, `png16`, `pfm` (configurable in the exporter).
 | **P0** Camera -> Dataset bridge | Done | Trajectory node + dataset exporter live; exporter now emits Nerfstudio metadata automatically. |
 | **P1** gsplat trainer | Done | In-process trainer implemented; handles Windows path/toolchain edge cases and now tolerates missing depth via fallback seeding. |
 | **P2** Depth-aware init | Done | Depth reprojection seeds gsplat when provided; synthetic fallback keeps training usable without depth. |
-| **P3** Quality & UX | In progress | Pending: trajectory preview, dataset validation, richer presets. |
+| **P3** Cosmos Integration | Done | Complete trajectory injection into Cosmos inference with camera conditioning, direct export from latents, enhanced nodes with embedded trajectory support. |
+| **P4** Quality & UX | In progress | Pending: trajectory preview, dataset validation, richer presets. |
 
 ## 8. Testing & Validation
 - Unit coverage pending (trajectory maths, JSON writer, depth handling). Path forward: add simple pytest cases or inline smoke tests.
@@ -101,10 +106,58 @@ Depth formats supported: `npy`, `png16`, `pfm` (configurable in the exporter).
 - Optional: ViPE/pose recovery backend for datasets without explicit trajectories.
 
 ## 10. Next Actions
-1. Duplicate Cosmos loader/inference into this repo, inject trajectory payloads, and capture RGB+depth outputs directly.
-2. Wire optional pose/depth recovery node into the dataset writer.
+1. ~~Duplicate Cosmos loader/inference into this repo, inject trajectory payloads, and capture RGB+depth outputs directly.~~ ✅ **COMPLETED**
+2. ~~Wire optional pose/depth recovery node into the dataset writer.~~ ✅ **COMPLETED**
 3. Author dataset validation + preview utilities (frustum plot, depth stats, axis sanity check).
 4. Add automated tests / sample workflows and document recommended configs in the README.
+
+### Completed Integration (P3 Milestone)
+The Cosmos integration is now **complete** with the following enhancements:
+
+- **Enhanced `sample_cosmos` function** (`comfy_gen3c/gen3c/sampler.py`):
+  - Full trajectory conditioning support with camera transforms and intrinsics encoding
+  - Integrates trajectory data directly into Cosmos model conditioning pipeline
+  - Supports depth extraction hooks for future depth-aware workflows
+
+- **Updated `Gen3CDiffusion` node** (`comfy_gen3c/gen3c/diffusion.py`):
+  - Now uses enhanced `sample_cosmos` with trajectory injection
+  - Seamless camera control through trajectory payloads
+  - Maintains compatibility with existing ComfyUI sampling infrastructure
+
+- **New trajectory-aware Cosmos nodes** (`comfy_gen3c/duplicated/nodes_cosmos.py`):
+  - `CosmosGen3CLatentVideo` and `CosmosGen3CImageToVideoLatent` embed trajectory data in latent dicts
+  - Automatic dimension extraction from trajectory metadata
+  - Backward compatible with original Cosmos node behavior
+
+- **Enhanced export workflow** (`comfy_gen3c/export_nodes.py`):
+  - New `Cosmos_Gen3C_DirectExport` node extracts trajectory from Cosmos latents automatically
+  - Eliminates need for separate trajectory wiring in complex workflows
+  - Maintains original export functionality for backward compatibility
+
+This enables **end-to-end trajectory control**: `Gen3C_CameraTrajectory` → `Gen3CDiffusion` → `Cosmos_Gen3C_DirectExport` → dataset → splat training, all within a single ComfyUI graph.
+
+### Completed Pose/Depth Recovery (P4 Milestone)
+The pose/depth recovery system is now **complete** with the following features:
+
+- **Comprehensive pose recovery backends** (`comfy_gen3c/dataset/pose_depth.py`):
+  - COLMAP integration for classical structure-from-motion
+  - ViPE wrapper for video-specific pose estimation (when available)
+  - Automatic fallback between backends with confidence scoring
+  - Support for both video files and image sequences
+
+- **ComfyUI pose recovery nodes** (`comfy_gen3c/dataset/recovery_nodes.py`):
+  - `Gen3C_PoseDepth_FromVideo` - recovers poses/depth from video files
+  - `Gen3C_PoseDepth_FromImages` - recovers poses/depth from image sequences
+  - Configurable backends, frame limits, and quality settings
+  - Returns trajectory data compatible with existing GEN3C pipeline
+
+- **Integrated dataset export** (`comfy_gen3c/export_nodes.py`):
+  - `Gen3C_VideoToDataset` - complete video→dataset pipeline with pose recovery
+  - Automatically extracts frames, runs SfM, and exports Nerfstudio-compatible datasets
+  - Optional external depth map integration
+  - Confidence scoring and error handling
+
+This enables **video-to-splat workflows** without explicit camera control: `Video File` → `Gen3C_VideoToDataset` → `SplatTrainer_gsplat` → splat output, handling pose recovery automatically.
 
 ## 11. Appendix — transforms.json Helper
 ```python

@@ -1,0 +1,115 @@
+{
+  "workflow_name": "Basic GEN3C to Gaussian Splat",
+  "description": "Complete workflow from prompt to Gaussian splat using explicit camera control",
+  "nodes": [
+    {
+      "id": 1,
+      "type": "Gen3C_CameraTrajectory",
+      "pos": [100, 100],
+      "inputs": {
+        "frames": 24,
+        "fps": 8,
+        "width": 1024,
+        "height": 576,
+        "fov_degrees": 60.0,
+        "preset": "orbit",
+        "orbit_radius": 4.0,
+        "orbit_turns": 1.0
+      },
+      "outputs": ["trajectory", "trajectory_json"]
+    },
+    {
+      "id": 2,
+      "type": "LyraModelLoader",
+      "pos": [100, 300],
+      "inputs": {
+        "lyra_encoder_path": "models/Lyra/lyra_static.pt",
+        "diffusion_model_path": "models/GEN3C/GEN3C-Cosmos-7B.pt",
+        "cosmos_tokenizer_path": "models/Lyra/Cosmos-0.1-Tokenizer-CV8x16x16-autoencoder.jit",
+        "device": "auto",
+        "precision": "fp16"
+      },
+      "outputs": ["lyra_model"]
+    },
+    {
+      "id": 3,
+      "type": "Gen3CDiffusion",
+      "pos": [400, 200],
+      "inputs": {
+        "lyra_model": ["node:2", "lyra_model"],
+        "camera_trajectory": ["node:1", "trajectory"],
+        "prompt": "A beautiful ancient temple surrounded by cherry blossoms, cinematic lighting",
+        "negative_prompt": "blurry, low quality, distorted",
+        "num_inference_steps": 30,
+        "guidance_scale": 7.5,
+        "seed": 42
+      },
+      "outputs": ["latents", "images", "cameras"]
+    },
+    {
+      "id": 4,
+      "type": "Gen3C_TrajectoryPreview",
+      "pos": [700, 100],
+      "inputs": {
+        "trajectory": ["node:3", "cameras"],
+        "plot_type": "all",
+        "output_dir": "${output_dir}/trajectory_preview"
+      },
+      "outputs": ["preview_image", "output_path"]
+    },
+    {
+      "id": 5,
+      "type": "Cosmos_Gen3C_DirectExport",
+      "pos": [700, 300],
+      "inputs": {
+        "images": ["node:3", "images"],
+        "latents": ["node:3", "latents"],
+        "output_dir": "${output_dir}/gen3c_dataset"
+      },
+      "outputs": ["dataset_dir", "trajectory"]
+    },
+    {
+      "id": 6,
+      "type": "Gen3C_DatasetValidator",
+      "pos": [1000, 200],
+      "inputs": {
+        "dataset_path": ["node:5", "dataset_dir"],
+        "generate_report": true
+      },
+      "outputs": ["quality_score", "validation_status", "issues", "stats"]
+    },
+    {
+      "id": 7,
+      "type": "SplatTrainer_gsplat",
+      "pos": [1000, 400],
+      "inputs": {
+        "dataset_path": ["node:5", "dataset_dir"],
+        "output_path": "${output_dir}/splat_output.ply",
+        "iterations": 3000,
+        "learning_rate": 0.01,
+        "batch_size": 1,
+        "enable_sh": true
+      },
+      "outputs": ["ply_path", "training_log"]
+    }
+  ],
+  "connections": [
+    {"from": "node:1.trajectory", "to": "node:3.camera_trajectory"},
+    {"from": "node:2.lyra_model", "to": "node:3.lyra_model"},
+    {"from": "node:3.cameras", "to": "node:4.trajectory"},
+    {"from": "node:3.images", "to": "node:5.images"},
+    {"from": "node:3.latents", "to": "node:5.latents"},
+    {"from": "node:5.dataset_dir", "to": "node:6.dataset_path"},
+    {"from": "node:5.dataset_dir", "to": "node:7.dataset_path"}
+  ],
+  "notes": [
+    "This workflow demonstrates the complete GEN3C pipeline:",
+    "1. Generate camera trajectory",
+    "2. Load GEN3C models",
+    "3. Generate video with camera control",
+    "4. Preview trajectory",
+    "5. Export dataset",
+    "6. Validate dataset quality",
+    "7. Train Gaussian splat"
+  ]
+}
