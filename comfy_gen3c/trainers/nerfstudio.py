@@ -16,16 +16,16 @@ class SplatTrainerNerfstudio:
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "dataset_dir": ("STRING", {"multiline": False}),
-                "workspace_dir": ("STRING", {"default": "${output_dir}/nerfstudio_runs"}),
-                "run_name": ("STRING", {"default": "gen3c_splat"}),
-                "max_iterations": ("INT", {"default": 30_000, "min": 1, "max": 2_000_000}),
-                "save_every": ("INT", {"default": 5_000, "min": 1, "max": 200_000}),
-                "skip_training": ("BOOLEAN", {"default": False}),
-                "export_after_train": ("BOOLEAN", {"default": True}),
+                "dataset_dir": ("STRING", {"multiline": False, "tooltip": "Path to dataset directory with transforms.json (Nerfstudio format)"}),
+                "workspace_dir": ("STRING", {"default": "${output_dir}/nerfstudio_runs", "tooltip": "Workspace directory for training outputs and checkpoints"}),
+                "run_name": ("STRING", {"default": "gen3c_splat", "tooltip": "Name for this training run (creates subdirectory)"}),
+                "max_iterations": ("INT", {"default": 30_000, "min": 1, "max": 2_000_000, "tooltip": "Total training iterations (30k recommended for good quality)"}),
+                "save_every": ("INT", {"default": 5_000, "min": 1, "max": 200_000, "tooltip": "Save checkpoint every N iterations"}),
+                "skip_training": ("BOOLEAN", {"default": False, "tooltip": "Skip training phase (useful for re-exporting existing checkpoints)"}),
+                "export_after_train": ("BOOLEAN", {"default": True, "tooltip": "Export Gaussian splat PLY after training completes"}),
             },
             "optional": {
-                "additional_args": ("STRING", {"multiline": True, "default": ""}),
+                "additional_args": ("STRING", {"multiline": True, "default": "", "tooltip": "Additional command-line arguments for ns-train (advanced)"}),
             },
         }
 
@@ -33,6 +33,7 @@ class SplatTrainerNerfstudio:
     RETURN_NAMES = ("run_dir", "export_dir")
     FUNCTION = "train_and_export"
     CATEGORY = "GEN3C/Training"
+    DESCRIPTION = "Train Gaussian Splats using Nerfstudio splatfacto pipeline via CLI. Requires 'ns-train' command available. For disk-based workflows with large datasets."
 
     def _resolve_binary(self, name: str) -> Optional[str]:
         return shutil.which(name)

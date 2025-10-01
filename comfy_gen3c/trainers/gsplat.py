@@ -284,18 +284,19 @@ class SplatTrainerGsplat:
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "dataset_dir": ("STRING", {"tooltip": "Path to dataset with transforms.json"}),
-                "output_dir": ("STRING", {"default": "${output_dir}/gsplat_runs"}),
-                "run_name": ("STRING", {"default": "gsplat_gen3c"}),
-                "max_iterations": ("INT", {"default": 1000, "min": 10, "max": 20000}),
-                "learning_rate": ("FLOAT", {"default": 5e-3, "min": 1e-5, "max": 1e-1, "step": 1e-5}),
-                "points_per_frame": ("INT", {"default": 50000, "min": 1000, "max": 2000000}),
-                "frames_per_batch": ("INT", {"default": 1, "min": 1, "max": 8}),
-                "depth_scale": ("FLOAT", {"default": 1.0, "min": 1e-3, "max": 1000.0, "step": 1e-3}),
-                "device": (("auto", "cuda", "cpu"), {"default": "auto"}),
+                "output_dir": ("STRING", {"default": "${output_dir}/gsplat_runs", "tooltip": "Output directory for trained PLY file"}),
+                "run_name": ("STRING", {"default": "gsplat_gen3c", "tooltip": "Name for this training run (creates subdirectory)"}),
+                "max_iterations": ("INT", {"default": 1000, "min": 10, "max": 20000, "tooltip": "Number of training iterations"}),
+                "learning_rate": ("FLOAT", {"default": 5e-3, "min": 1e-5, "max": 1e-1, "step": 1e-5, "tooltip": "Adam optimizer learning rate"}),
+                "points_per_frame": ("INT", {"default": 50000, "min": 1000, "max": 2000000, "tooltip": "Max points to sample per frame for initialization"}),
+                "frames_per_batch": ("INT", {"default": 1, "min": 1, "max": 8, "tooltip": "Number of frames per training batch (higher uses more VRAM)"}),
+                "depth_scale": ("FLOAT", {"default": 1.0, "min": 1e-3, "max": 1000.0, "step": 1e-3, "tooltip": "Scale factor for depth values (adjust if depth units are off)"}),
+                "device": (("auto", "cuda", "cpu"), {"default": "auto", "tooltip": "Training device: 'auto' selects CUDA if available"}),
             },
             "optional": {
-                "block_width": ("INT", {"default": 16, "min": 2, "max": 16}),
+                "dataset_dir": ("STRING", {"tooltip": "Optional: Path to dataset directory with transforms.json (for disk-based workflow)"}),
+                "dataset": ("GEN3C_DATASET", {"tooltip": "Optional: Direct dataset input from export nodes (memory-based workflow)"}),
+                "block_width": ("INT", {"default": 16, "min": 2, "max": 16, "tooltip": "Rasterization tile size (lower uses less memory)"}),
             },
         }
 
@@ -303,35 +304,56 @@ class SplatTrainerGsplat:
     RETURN_NAMES = ("ply_path",)
     FUNCTION = "train"
     CATEGORY = "GEN3C/Training"
+    DESCRIPTION = "Train Gaussian Splats using gsplat rasterizer. Accepts both disk-based (dataset_dir) and memory-based (dataset) inputs. Requires CUDA and Microsoft C++ Build Tools on Windows."
 
-    def train(
-        self,
-        dataset_dir: str,
-        output_dir: str,
-        run_name: str,
-        max_iterations: int,
-        learning_rate: float,
-        points_per_frame: int,
-        frames_per_batch: int,
-        depth_scale: float,
-        device: str,
-        block_width: int = 16,
-    ) -> Tuple[str]:
-        if gsplat is None:
-            raise RuntimeError(
-                "gsplat library is not available. Install gsplat (pip install gsplat) "
-                f"or resolve import error: {GSPLAT_IMPORT_ERROR}"
-            )
+    def _load_from_memory(self, dataset_dict: Dict[str, Any], depth_scale: float) -> Tuple[List[FrameRecord], float, float, float, float, int, int]:
+        """Load dataset from in-memory structure (GEN3C_DATASET)."""
+        trajectory = dataset_dict["trajectory"]
+        rgb_frames_tensor = dataset_dict["rgb_frames"]
+        depth_frames_tensor = dataset_dict.get("depth_frames")
 
-        dataset_path = Path(dataset_dir).expanduser().resolve()
-        if not dataset_path.exists():
-            raise FileNotFoundError(f"Dataset directory '{dataset_path}' not found.")
+        frames_meta = trajectory.get("frames", [])
+        if not frames_meta:
+            raise ValueError("Trajectory missing frame metadata")
 
+        first_frame = frames_meta[0]
+        width = int(first_frame.get("width"))
+        height = int(first_frame.get("height"))
+        intrinsics = first_frame.get("intrinsics")
+        fx = float(intrinsics[0][0])
+        fy = float(intrinsics[1][1])
+        cx = float(intrinsics[0][2])
+        cy = float(intrinsics[1][2])
+
+        frames: List[FrameRecord] = []
+        for idx, frame_meta in enumerate(frames_meta):
+            # RGB from tensor
+            rgb_tensor = rgb_frames_tensor[idx].permute(2, 0, 1)  # (H, W, C) -> (C, H, W)
+
+            # Depth from tensor if available
+            depth_tensor = None
+            if depth_frames_tensor is not None and idx < depth_frames_tensor.shape[0]:
+                depth_tensor = depth_frames_tensor[idx] * depth_scale
+
+            cam_to_world = torch.tensor(frame_meta["extrinsics"]["camera_to_world"], dtype=torch.float32)
+            world_to_cam = _invert(cam_to_world)
+
+            frames.append(FrameRecord(
+                rgb=rgb_tensor,
+                depth=depth_tensor,
+                camera_to_world=cam_to_world,
+                world_to_camera=world_to_cam,
+                width=width,
+                height=height,
+            ))
+
+        return frames, fx, fy, cx, cy, width, height
+
+    def _load_from_disk(self, dataset_path: Path, depth_scale: float) -> Tuple[List[FrameRecord], float, float, float, float, int, int]:
+        """Load dataset from disk directory with transforms.json."""
         transforms_path = dataset_path / "transforms.json"
         if not transforms_path.exists():
-            raise FileNotFoundError(
-                f"Dataset missing transforms.json at '{transforms_path}'."
-            )
+            raise FileNotFoundError(f"Dataset missing transforms.json at '{transforms_path}'.")
 
         with transforms_path.open("r", encoding="utf-8") as fh:
             transforms = json.load(fh)
@@ -340,17 +362,10 @@ class SplatTrainerGsplat:
         fy = float(transforms["fl_y"])
         cx = float(transforms["cx"])
         cy = float(transforms["cy"])
-        fps = transforms.get("fps", 24)
-
         width = int(transforms["w"])
         height = int(transforms["h"])
-        near_plane = float(transforms.get("near_plane", 0.1))
-        far_plane = float(transforms.get("far_plane", max(near_plane + 1.0, 10.0)))
-        if far_plane <= near_plane:
-            far_plane = near_plane + 1.0
 
         frames: List[FrameRecord] = []
-        missing_depth_frames = 0
         for frame_entry in transforms["frames"]:
             rgb_path = dataset_path / frame_entry["file_path"]
             if not rgb_path.exists():
@@ -361,27 +376,69 @@ class SplatTrainerGsplat:
             depth_path_entry = frame_entry.get("depth_path")
             if depth_path_entry is not None:
                 depth_path = dataset_path / depth_path_entry
-                if not depth_path.exists():
-                    raise FileNotFoundError(f"Missing depth frame at '{depth_path}'.")
-                depth_tensor = _load_depth(depth_path, depth_scale)
-            else:
-                missing_depth_frames += 1
+                if depth_path.exists():
+                    depth_tensor = _load_depth(depth_path, depth_scale)
 
-            cam_to_world = torch.tensor(
-                frame_entry["transform_matrix"], dtype=torch.float32
-            )
+            cam_to_world = torch.tensor(frame_entry["transform_matrix"], dtype=torch.float32)
             world_to_cam = _invert(cam_to_world)
 
-            frames.append(
-                FrameRecord(
-                    rgb=rgb_tensor,
-                    depth=depth_tensor,
-                    camera_to_world=cam_to_world,
-                    world_to_camera=world_to_cam,
-                    width=width,
-                    height=height,
-                )
+            frames.append(FrameRecord(
+                rgb=rgb_tensor,
+                depth=depth_tensor,
+                camera_to_world=cam_to_world,
+                world_to_camera=world_to_cam,
+                width=width,
+                height=height,
+            ))
+
+        return frames, fx, fy, cx, cy, width, height
+
+    def train(
+        self,
+        output_dir: str,
+        run_name: str,
+        max_iterations: int,
+        learning_rate: float,
+        points_per_frame: int,
+        frames_per_batch: int,
+        depth_scale: float,
+        device: str,
+        dataset_dir: str = "",
+        dataset: Optional[Dict[str, Any]] = None,
+        block_width: int = 16,
+    ) -> Tuple[str]:
+        if gsplat is None:
+            raise RuntimeError(
+                "gsplat library is not available. Install gsplat (pip install gsplat) "
+                f"or resolve import error: {GSPLAT_IMPORT_ERROR}"
             )
+
+        # Load dataset from either source
+        if dataset is not None and dataset.get("rgb_frames") is not None:
+            # Use direct memory input
+            frames, fx, fy, cx, cy, width, height = self._load_from_memory(dataset, depth_scale)
+        elif dataset_dir:
+            # Use disk-based input
+            dataset_path = Path(dataset_dir).expanduser().resolve()
+            if not dataset_path.exists():
+                raise FileNotFoundError(f"Dataset directory '{dataset_path}' not found.")
+            frames, fx, fy, cx, cy, width, height = self._load_from_disk(dataset_path, depth_scale)
+        else:
+            raise ValueError("Must provide either 'dataset' (memory) or 'dataset_dir' (disk) input")
+
+        # Get near/far plane from trajectory or use defaults
+        if dataset is not None:
+            trajectory = dataset.get("trajectory", {})
+            frames_meta = trajectory.get("frames", [])
+            near_plane = frames_meta[0].get("near", 0.1) if frames_meta else 0.1
+            far_plane = frames_meta[0].get("far", 1000.0) if frames_meta else 1000.0
+        else:
+            # Already loaded from disk transforms.json
+            near_plane = 0.1
+            far_plane = 1000.0
+
+        if far_plane <= near_plane:
+            far_plane = near_plane + 1.0
 
         if not frames:
             raise RuntimeError("No frames found in dataset.")

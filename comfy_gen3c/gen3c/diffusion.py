@@ -26,25 +26,26 @@ class Gen3CDiffusion:
     def INPUT_TYPES(cls):  # pragma: no cover - UI definition
         return {
             "required": {
-                "lyra_model": ("LYRA_MODEL", {}),
-                "camera_trajectory": ("GEN3C_TRAJECTORY", {}),
-                "num_inference_steps": ("INT", {"default": 50, "min": 1, "max": 500}),
-                "guidance_scale": ("FLOAT", {"default": 7.5, "min": 0.0, "max": 30.0, "step": 0.1}),
-                "prompt": ("STRING", {"multiline": True, "default": ""}),
-                "negative_prompt": ("STRING", {"multiline": True, "default": ""}),
-                "seed": ("INT", {"default": 0, "min": 0, "max": 0xFFFFFFFF}),
-                "sampler_name": (comfy.samplers.KSampler.SAMPLERS, {"default": DEFAULT_SAMPLER}),
-                "scheduler": (comfy.samplers.KSampler.SCHEDULERS, {"default": DEFAULT_SCHEDULER}),
+                "lyra_model": ("LYRA_MODEL", {"tooltip": "Loaded GEN3C/Cosmos model bundle from LyraModelLoader"}),
+                "camera_trajectory": ("GEN3C_TRAJECTORY", {"tooltip": "Camera trajectory from Gen3C_CameraTrajectory defining camera motion"}),
+                "num_inference_steps": ("INT", {"default": 50, "min": 1, "max": 500, "tooltip": "Number of diffusion sampling steps (more = higher quality, slower)"}),
+                "guidance_scale": ("FLOAT", {"default": 7.5, "min": 0.0, "max": 30.0, "step": 0.1, "tooltip": "Classifier-free guidance strength (higher = closer to prompt)"}),
+                "prompt": ("STRING", {"multiline": True, "default": "", "tooltip": "Text description of desired video content"}),
+                "negative_prompt": ("STRING", {"multiline": True, "default": "", "tooltip": "Describe unwanted content to avoid"}),
+                "seed": ("INT", {"default": 0, "min": 0, "max": 0xFFFFFFFF, "tooltip": "Random seed for reproducible generation"}),
+                "sampler_name": (comfy.samplers.KSampler.SAMPLERS, {"default": DEFAULT_SAMPLER, "tooltip": "Sampling algorithm (res_multistep recommended)"}),
+                "scheduler": (comfy.samplers.KSampler.SCHEDULERS, {"default": DEFAULT_SCHEDULER, "tooltip": "Noise schedule for diffusion process"}),
             },
             "optional": {
-                "denoise": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01}),
+                "denoise": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01, "tooltip": "Denoising strength (1.0 = full generation from noise)"}),
             },
         }
 
-    RETURN_TYPES = ("LATENTS", "IMAGE", "GEN3C_TRAJECTORY")
+    RETURN_TYPES = ("LATENT", "IMAGE", "GEN3C_TRAJECTORY")
     RETURN_NAMES = ("latents", "images", "cameras")
     FUNCTION = "sample"
     CATEGORY = "GEN3C/Diffusion"
+    DESCRIPTION = "Generate camera-controlled videos using GEN3C/Cosmos. Combines text prompts with camera trajectories for precise motion control. Connect trajectory → this node → export nodes."
 
     def _encode_prompt(self, clip, text: str, frame_rate: float) -> list:
         tokens = clip.tokenize(text)

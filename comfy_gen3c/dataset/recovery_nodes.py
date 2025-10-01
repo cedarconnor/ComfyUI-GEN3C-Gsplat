@@ -18,15 +18,15 @@ class Gen3CPoseDepthFromVideo:
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "video_path": ("STRING", {"default": ""}),
-                "max_frames": ("INT", {"default": 50, "min": 2, "max": 500}),
-                "backend": (["auto", "colmap", "vipe"], {"default": "auto"}),
-                "estimate_depth": ("BOOLEAN", {"default": True}),
-                "downsample_factor": ("FLOAT", {"default": 0.5, "min": 0.1, "max": 1.0, "step": 0.1}),
+                "video_path": ("STRING", {"default": "", "tooltip": "Path to video file for camera pose extraction"}),
+                "max_frames": ("INT", {"default": 50, "min": 2, "max": 500, "tooltip": "Maximum frames to extract (evenly sampled from video)"}),
+                "backend": (["auto", "colmap", "vipe"], {"default": "auto", "tooltip": "SfM backend: 'auto' tries ViPE→COLMAP, or select specific"}),
+                "estimate_depth": ("BOOLEAN", {"default": True, "tooltip": "Enable depth map estimation during pose recovery"}),
+                "downsample_factor": ("FLOAT", {"default": 0.5, "min": 0.1, "max": 1.0, "step": 0.1, "tooltip": "Downsample images for faster SfM (0.5 = half size)"}),
             },
             "optional": {
-                "matcher_type": (["exhaustive", "sequential"], {"default": "exhaustive"}),
-                "refinement_iterations": ("INT", {"default": 3, "min": 1, "max": 10}),
+                "matcher_type": (["exhaustive", "sequential"], {"default": "exhaustive", "tooltip": "Feature matching: 'exhaustive' (accurate) or 'sequential' (fast)"}),
+                "refinement_iterations": ("INT", {"default": 3, "min": 1, "max": 10, "tooltip": "Bundle adjustment iterations for pose refinement"}),
             }
         }
 
@@ -34,6 +34,7 @@ class Gen3CPoseDepthFromVideo:
     RETURN_NAMES = ("trajectory", "images", "confidence", "status")
     FUNCTION = "recover_poses"
     CATEGORY = "GEN3C/Recovery"
+    DESCRIPTION = "Recover camera poses from video using COLMAP or ViPE structure-from-motion. Outputs trajectory compatible with splat trainers and quality validators. Requires COLMAP installed."
 
     def _result_to_trajectory(
         self,
@@ -192,15 +193,15 @@ class Gen3CPoseDepthFromImages:
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "images": ("IMAGE", {}),
-                "backend": (["auto", "colmap"], {"default": "colmap"}),
-                "estimate_depth": ("BOOLEAN", {"default": True}),
-                "downsample_factor": ("FLOAT", {"default": 1.0, "min": 0.1, "max": 1.0, "step": 0.1}),
+                "images": ("IMAGE", {"tooltip": "Image sequence tensor (F, H, W, C) for pose recovery"}),
+                "backend": (["auto", "colmap"], {"default": "colmap", "tooltip": "SfM backend for pose estimation (COLMAP recommended)"}),
+                "estimate_depth": ("BOOLEAN", {"default": True, "tooltip": "Estimate depth maps from multi-view geometry"}),
+                "downsample_factor": ("FLOAT", {"default": 1.0, "min": 0.1, "max": 1.0, "step": 0.1, "tooltip": "Image downsampling for SfM (1.0 = no downsampling)"}),
             },
             "optional": {
-                "matcher_type": (["exhaustive", "sequential"], {"default": "exhaustive"}),
-                "refinement_iterations": ("INT", {"default": 3, "min": 1, "max": 10}),
-                "fps": ("INT", {"default": 24, "min": 1, "max": 120}),
+                "matcher_type": (["exhaustive", "sequential"], {"default": "exhaustive", "tooltip": "Feature matching strategy"}),
+                "refinement_iterations": ("INT", {"default": 3, "min": 1, "max": 10, "tooltip": "Bundle adjustment iterations"}),
+                "fps": ("INT", {"default": 24, "min": 1, "max": 120, "tooltip": "Frames per second for output trajectory"}),
             }
         }
 
@@ -208,6 +209,7 @@ class Gen3CPoseDepthFromImages:
     RETURN_NAMES = ("trajectory", "confidence", "status")
     FUNCTION = "recover_poses"
     CATEGORY = "GEN3C/Recovery"
+    DESCRIPTION = "Recover camera poses from image sequence using COLMAP. Useful for converting existing image sets to splat-trainable datasets. Images saved to temporary directory during processing."
 
     def _images_to_paths(self, images: torch.Tensor) -> List[Path]:
         """Save images to temporary files for SfM processing."""
