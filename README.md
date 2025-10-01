@@ -597,6 +597,69 @@ Gen3C_PoseDepth_FromVideo → Gen3C_QualityFilter → Gen3C_VideoToDataset
 
 ## 🔧 Advanced Configuration
 
+### Camera Motion Presets
+
+**14 Built-in Cinematic Presets:**
+
+1. **orbit** - Circular motion around target
+   - Parameters: `orbit_radius`, `orbit_height`, `orbit_turns`
+   - Use for: 360° product shots, scene reveals
+
+2. **dolly_in** - Push in toward target
+   - Parameters: `dolly_start`, `dolly_end`
+   - Use for: Subject reveals, dramatic entrances
+
+3. **dolly_out** - Pull out from target
+   - Parameters: `dolly_start`, `dolly_end`
+   - Use for: Scene reveals, context establishment
+
+4. **truck_left** - Lateral movement from right to left
+   - Parameters: `truck_span`, `truck_depth`
+   - Use for: Parallax effects, environment reveal
+
+5. **truck_right** - Lateral movement from left to right
+   - Parameters: `truck_span`, `truck_depth`
+   - Use for: Parallax effects, environment reveal
+
+6. **crane_up** - Vertical lift upward
+   - Parameters: `crane_start_height`, `crane_end_height`, `orbit_radius`
+   - Use for: Epic reveals, establishing shots
+
+7. **crane_down** - Vertical descent downward
+   - Parameters: `crane_start_height`, `crane_end_height`, `orbit_radius`
+   - Use for: Intimate moments, detail focus
+
+8. **arc_left** - Partial orbit from front to left
+   - Parameters: `orbit_radius`, `arc_degrees` (default 90°)
+   - Use for: Subject reveals with rotation
+
+9. **arc_right** - Partial orbit from front to right
+   - Parameters: `orbit_radius`, `arc_degrees` (default 90°)
+   - Use for: Subject reveals with rotation
+
+10. **tilt** - Vertical tilt motion
+    - Parameters: `orbit_radius`, `tilt_degrees`
+    - Use for: Height emphasis, scale demonstration
+
+11. **spiral** - Spiral inward/outward with height variation
+    - Parameters: `spiral_start`, `spiral_end`, `orbit_turns`
+    - Use for: Dynamic reveals, complex motion
+
+12. **boom_shot** - Combined dolly + crane (smooth curved motion)
+    - Parameters: `boom_start_radius`, `boom_end_radius`, `boom_start_height`, `boom_end_height`
+    - Use for: Cinematic reveals, dramatic transitions
+
+13. **figure_eight** - Figure-8 pattern around target
+    - Parameters: `orbit_radius`, `orbit_turns` (loops)
+    - Use for: Dynamic product shots, artistic motion
+
+14. **hemisphere** - Orbit with varying elevation
+    - Parameters: `orbit_radius`, `hemisphere_elevation`
+    - Use for: Complete coverage, multi-angle capture
+
+15. **custom** - User-defined keyframe trajectory
+    - See custom keyframes section below
+
 ### Custom Camera Trajectories
 ```json
 {
@@ -607,6 +670,21 @@ Gen3C_PoseDepth_FromVideo → Gen3C_QualityFilter → Gen3C_VideoToDataset
   ]
 }
 ```
+
+### Preset Quick Reference
+
+| Preset | Motion Type | Best For | Key Parameters |
+|--------|-------------|----------|----------------|
+| orbit | Circular | 360° views | radius, turns |
+| dolly_in/out | Linear depth | Reveals | start, end distance |
+| truck_left/right | Lateral | Parallax | span, depth |
+| crane_up/down | Vertical | Scale/drama | start/end height |
+| arc_left/right | Partial orbit | Reveals with rotation | radius, arc angle |
+| spiral | Helical | Complex motion | start/end radius, turns |
+| boom_shot | Curved 3D | Cinematic | all 4 boom params |
+| figure_eight | Lissajous | Dynamic product shots | radius, loops |
+| hemisphere | Spherical | Complete coverage | radius, elevation |
+| tilt | Angular tilt | Height emphasis | radius, degrees |
 
 ### Quality Filter Settings
 - **Blur threshold**: 0.3-0.7 (higher = more strict)
