@@ -1,22 +1,37 @@
 # ComfyUI-GEN3C-Gsplat
 
-A comprehensive ComfyUI node pack that bridges Cosmos/GEN3C video generation with Gaussian Splat (3DGS) training, featuring camera control, pose recovery, quality validation, and end-to-end pipelines from prompt to splat.
+A **simplified and streamlined** ComfyUI node pack that bridges Cosmos/GEN3C video generation with Gaussian Splat (3DGS) training, featuring camera control, pose recovery, quality validation, and end-to-end pipelines from prompt to splat.
+
+## 🎉 **NEW: Simplified Workflow (v2.0)**
+
+The node pack has been **completely redesigned** for ease of use:
+
+- **7 core nodes** (down from 13) - 46% reduction in complexity
+- **71% fewer parameters** on camera node (7 instead of 24+)
+- **Auto-detection** - nodes intelligently detect input types
+- **Unified operations** - single nodes replace multiple specialized ones
+- **Same power, cleaner UI** - all advanced features still available
+
+See [SIMPLIFICATION_SUMMARY.md](SIMPLIFICATION_SUMMARY.md) for complete details.
+
+---
 
 ## ✨ Key Features
 
 ### 🎥 **Complete GEN3C Pipeline**
-- **Camera Control** – `Gen3C_CameraTrajectory` with presets (orbit, dolly, truck, tilt, spiral) and custom keyframes
+- **Camera Control** – `Gen3C_Camera` with 14 presets (orbit, dolly, truck, crane, spiral, etc.) - just 7 required parameters!
 - **Cosmos Integration** – Full trajectory injection into GEN3C diffusion with enhanced sampling
-- **Direct Export** – `Cosmos_Gen3C_DirectExport` extracts trajectory from latents automatically
+- **Smart Export** – `Gen3C_Export` auto-detects input types and extracts trajectories automatically
 - **Enhanced Nodes** – Trajectory-aware Cosmos nodes with embedded camera data
 
 ### 🔄 **Pose Recovery System**
+- **Unified Node** – `Gen3C_PoseRecovery` handles both video files and image sequences
 - **Multiple Backends** – COLMAP (classical SfM), ViPE (video-specific), automatic fallback
-- **Video Processing** – `Gen3C_VideoToDataset` for complete video→dataset pipeline
-- **Image Sequences** – `Gen3C_PoseDepth_FromImages` for photo collections
+- **Integrated Export** – `Gen3C_Export` runs pose recovery automatically when given video_path
 - **Quality Scoring** – Confidence metrics and error reporting
 
 ### 📊 **Quality & Validation Tools**
+- **All-in-One Quality** – `Gen3C_Quality` node with 5 modes: validate, filter, analyze, preview, or all
 - **Dataset Validation** – Comprehensive structure, pose, and image quality checks
 - **Trajectory Analysis** – Smoothness, coverage, baseline quality metrics
 - **Quality Filtering** – Automatic removal of low-quality frames
@@ -28,10 +43,10 @@ A comprehensive ComfyUI node pack that bridges Cosmos/GEN3C video generation wit
 - **Quality Optimization** – Smart initialization from pose recovery or depth maps
 - **Windows Compatible** – Handles build tools and path issues gracefully
 
-### 🔍 **Advanced Workflows**
-- **End-to-End Control** – `Gen3C_CameraTrajectory` → `Gen3CDiffusion` → `Export` → `Training`
-- **Video-to-Splat** – `Video` → `PoseRecovery` → `QualityFilter` → `Training`
-- **Quality Pipelines** – Validation → Filtering → Preview → Training with quality gates
+### 🔍 **Simplified Workflows**
+- **End-to-End Control** – `Gen3C_Camera` → `Gen3CDiffusion` → `Gen3C_Export` → `Training` (4 nodes!)
+- **Video-to-Splat** – `Gen3C_Export` (with video_path) → `Training` (2 nodes!)
+- **Quality Pipeline** – Add `Gen3C_Quality` between export and training (3 nodes total!)
 
 ## 📋 Requirements
 
@@ -82,51 +97,140 @@ pip install matplotlib
 3. Download required model weights (see Requirements section)
 4. Restart ComfyUI to discover new nodes
 
-### Basic Usage
+### Basic Usage (Simplified!)
 
-#### 1. **Controlled GEN3C Generation**
+#### 1. **Controlled GEN3C Generation** (4 nodes)
 ```
-Gen3C_CameraTrajectory → LyraModelLoader → Gen3CDiffusion →
-Cosmos_Gen3C_DirectExport → SplatTrainer_gsplat → Output.ply
+Gen3C_Camera → LyraModelLoader → Gen3CDiffusion → Gen3C_Export → SplatTrainer_gsplat
 ```
-`Cosmos_Gen3C_DirectExport` now recovers the injected camera path directly from `Gen3CDiffusion` latents.
-Route the in-memory `dataset` output straight into `SplatTrainer_gsplat.dataset` for a zero-disk training loop,
-or keep `write_to_disk=True` when you want reusable assets.
+- Set camera preset (orbit, dolly, etc.) with just radius & height
+- Export auto-detects latents and extracts trajectory
+- Memory-based (write_to_disk=false) for fastest performance
 
-#### 2. **Video-to-Splat Pipeline**
+#### 2. **Video-to-Splat Pipeline** (2 nodes!)
 ```
-Video File → Gen3C_VideoToDataset → Gen3C_QualityFilter →
-SplatTrainer_gsplat → Output.ply
+Gen3C_Export (video_path="input.mp4") → SplatTrainer_gsplat
 ```
-`Gen3C_VideoToDataset` copies the requested FPS into `transforms.json` and matches the recovered pose metadata
-to the actual extracted frame resolution, so downstream trainers see true timing and intrinsics.
+- Single export node handles pose recovery automatically
+- Just provide video_path - everything else is automatic!
 
-#### 3. **Quality Control Workflow**
+#### 3. **Quality Control Workflow** (3 nodes)
 ```
-Dataset → Gen3C_DatasetValidator → Gen3C_TrajectoryPreview →
-Gen3C_QualityFilter → Training
+Gen3C_Camera → Gen3CDiffusion → Gen3C_Export →
+Gen3C_Quality (mode="all") → SplatTrainer_gsplat
 ```
+- Quality node runs all checks: validate, filter, analyze, preview
+- One node replaces entire validation pipeline
 
-## 📖 Node Reference & Wiring Guide
+## 📖 Simplified Node Reference
 
-### 🎬 Camera & Trajectory Nodes
+### Core Nodes (7 Total)
 
-#### `Gen3C_CameraTrajectory`
-Generate camera paths with built-in presets or custom keyframes.
+The workflow has been simplified from 13 nodes to 7 core nodes for easier use while maintaining full functionality.
 
-**Inputs:**
+---
+
+### 🎬 `Gen3C_Camera`
+**Simplified camera trajectory generator with cleaner UI.**
+
+**Required Inputs:**
+- `preset` (ENUM): Camera motion (orbit, dolly, truck, crane, spiral, arc, tilt, boom, hemisphere, figure_eight)
 - `frames` (INT): Total number of frames
 - `fps` (INT): Frames per second
 - `width`/`height` (INT): Frame dimensions (must be multiples of 8)
-- `fov_degrees` (FLOAT): Horizontal field of view
-- `preset` (ENUM): orbit, dolly, truck, tilt, spiral, or custom
-- `keyframes_json` (STRING, optional): Custom trajectory as JSON
+- `radius` (FLOAT): Camera distance from target (works for most presets)
+- `height_offset` (FLOAT): Height above ground plane
+
+**Optional Inputs (Advanced):**
+- `fov_degrees`, `principal_x/y`, `near_plane`, `far_plane`, `handedness`
+- `turns`, `start/end_distance`, `start/end_height`, `span`, `angle_degrees`
+- `keyframes_json`: Custom trajectory JSON
 
 **Outputs:**
-- `trajectory` (GEN3C_TRAJECTORY): Camera trajectory data
-- `trajectory_json` (STRING): JSON representation
+- `trajectory` (GEN3C_TRAJECTORY)
+- `trajectory_json` (STRING)
 
-**Wiring:** Connect `trajectory` → `Gen3CDiffusion.camera_trajectory` or export nodes
+**Improvement:** Reduced from 24+ required parameters to just 7, with advanced options available when needed.
+
+---
+
+### 📦 `Gen3C_Export`
+**Unified export node that auto-detects input type.**
+
+**Required Inputs:**
+- `output_dir` (STRING): Output directory
+- `write_to_disk` (BOOLEAN): Toggle disk writing vs memory passing
+
+**Optional Inputs:**
+- **For Cosmos inference:** `images`, `latents`, `trajectory`
+- **For video workflow:** `video_path`, `max_frames`, `backend`, `estimate_depth`
+- **Common:** `depth_maps`, `metadata_json`, `fps`
+
+**Outputs:**
+- `dataset_dir` (STRING): Export path
+- `trajectory` (GEN3C_TRAJECTORY): Extracted/provided trajectory
+- `dataset` (GEN3C_DATASET): In-memory dataset
+- `confidence` (FLOAT): Pose recovery confidence (if applicable)
+- `status` (STRING): Operation status
+
+**Auto-Detection:**
+- Detects video_path → runs pose recovery automatically
+- Detects latents → extracts embedded trajectory
+- Detects explicit trajectory → uses it directly
+
+**Replaces:** 3 previous export nodes (Cosmos_Gen3C_InferExport, Cosmos_Gen3C_DirectExport, Gen3C_VideoToDataset)
+
+---
+
+### 🔄 `Gen3C_PoseRecovery`
+**Unified pose recovery from video files or image sequences.**
+
+**Required Inputs:**
+- `source_type` (ENUM): "video_file" or "image_sequence"
+- `backend` (ENUM): auto, colmap, or vipe
+- `max_frames` (INT): Maximum frames to process
+- `estimate_depth` (BOOLEAN): Enable depth estimation
+- `downsample_factor` (FLOAT): Image downsampling (0.5 = half resolution)
+- `fps` (INT): Output trajectory FPS
+
+**Optional Inputs:**
+- `video_path` (STRING): Required for video_file mode
+- `images` (IMAGE): Required for image_sequence mode
+- `matcher_type` (ENUM): exhaustive or sequential
+- `refinement_iterations` (INT): Bundle adjustment iterations
+
+**Outputs:**
+- `trajectory` (GEN3C_TRAJECTORY)
+- `images` (IMAGE): Extracted/processed frames
+- `confidence` (FLOAT): SfM quality score
+- `status` (STRING): Recovery status
+
+**Replaces:** 2 legacy pose recovery nodes
+
+---
+
+### ✅ `Gen3C_Quality`
+**Unified quality control for validation, filtering, analysis, and preview.**
+
+**Required Inputs:**
+- `mode` (ENUM): validate, filter, analyze, preview, or **all**
+- `trajectory` (GEN3C_TRAJECTORY)
+
+**Optional Inputs:**
+- `dataset_path` (STRING): Required for validate/filter modes
+- **Validation:** `min_frames`, `max_frames`
+- **Filtering:** `quality_threshold`, `min_blur_threshold`, `min/max_brightness`
+- **Preview:** `plot_type`, `output_dir`
+
+**Outputs:**
+- `filtered_trajectory` (GEN3C_TRAJECTORY)
+- `quality_score` (FLOAT): Overall quality metric
+- `report` (STRING): Comprehensive quality report
+- `preview_image` (IMAGE): Trajectory visualization
+- `status` (STRING)
+- `frames_kept` / `frames_removed` (INT)
+
+**Replaces:** 4 previous validation nodes (DatasetValidator, TrajectoryPreview, QualityFilter, TrajectoryQualityAnalysis)
 
 ---
 
@@ -349,17 +453,18 @@ Analyze trajectory quality metrics.
 - `smoothness`/`coverage`/`baseline_quality`/`rotation_diversity` (FLOAT)
 - `analysis_report` (STRING)
 
-## 🎯 Complete Workflow Examples
+## 🎯 Simplified Workflow Examples
 
-### **Example 1: Memory-Based GEN3C → Splat** ⚡ (RECOMMENDED - Fast!)
+### **Example 1: GEN3C → Splat (Memory-Based)** ⚡ RECOMMENDED
 
-**No file I/O between export and training!**
+**Fastest workflow with no intermediate file I/O!**
 
 ```
 ┌─────────────────────────────┐
-│ Gen3C_CameraTrajectory      │
+│ Gen3C_Camera                │
 │ - preset: orbit             │
 │ - frames: 121               │
+│ - radius: 6.0               │  ⭐ Simplified from 24+ params to 7!
 └──────────┬──────────────────┘
            │ trajectory
            ▼
@@ -371,30 +476,29 @@ Analyze trajectory quality metrics.
 ┌─────────────────────────────┐
 │ Gen3CDiffusion              │
 │ - prompt: "flying dragon"   │
-│ - num_inference_steps: 50   │
 └──────────┬──────────────────┘
-           │ latents, images
+           │ images, latents
            ▼
 ┌─────────────────────────────┐
-│ Cosmos_Gen3C_DirectExport   │
-│ - write_to_disk: FALSE ⭐   │  <-- KEY: Disable disk writing
+│ Gen3C_Export                │  ⭐ Auto-detects latents, extracts trajectory
+│ - write_to_disk: FALSE      │
 └──────────┬──────────────────┘
            │ dataset (in-memory)
            ▼
 ┌─────────────────────────────┐
 │ SplatTrainer_gsplat         │
 │ - max_iterations: 3000      │
-│ - Connect 'dataset' input ⭐│  <-- Direct memory connection
 └──────────┬──────────────────┘
            │ ply_path
            ▼
        point_cloud.ply
 ```
 
-**Advantages:**
+**Benefits:**
 - ⚡ **Faster** - No file I/O overhead
 - 💾 **Less disk space** - No intermediate files
-- 🔄 **Cleaner** - No dataset folders to manage
+- 🎯 **Simpler** - 7 camera params instead of 24+
+- 🤖 **Auto-detection** - Export node extracts trajectory from latents automatically
 
 ---
 
@@ -441,29 +545,20 @@ Files written to disk:
 
 ---
 
-### **Example 3: Video → Splat with Pose Recovery**
+### **Example 3: Video → Splat (Simplified)**
 
-**Convert existing videos to splats.**
+**Convert any video to a Gaussian splat with automatic pose recovery!**
 
 ```
 ┌─────────────────────────────┐
-│ Input: video.mp4            │
-└──────────┬──────────────────┘
-           │
-           ▼
-┌─────────────────────────────┐
-│ Gen3C_VideoToDataset        │
-│ - video_path: video.mp4     │
+│ Gen3C_Export                │  ⭐ Single unified node!
+│ - video_path: "video.mp4"   │
 │ - max_frames: 50            │
 │ - backend: auto             │
-│ - write_to_disk: FALSE ⭐   │  <-- Memory workflow
+│ - write_to_disk: FALSE      │
 └──────────┬──────────────────┘
            │ dataset, trajectory, confidence
-           ▼
-┌─────────────────────────────┐
-│ Gen3C_TrajectoryQualityAnalysis │ (optional)
-└──────────┬──────────────────┘
-           │ overall_score
+           │ (pose recovery runs automatically)
            ▼
 ┌─────────────────────────────┐
 │ SplatTrainer_gsplat         │
@@ -474,47 +569,48 @@ Files written to disk:
        point_cloud.ply
 ```
 
+**Magic:** Export node detects video_path and runs pose recovery automatically!
+
 ---
 
-### **Example 4: Quality-Controlled Pipeline**
+### **Example 4: Quality-Controlled Pipeline (Simplified)**
 
-**With validation and filtering.**
+**Comprehensive quality control in one node!**
 
 ```
 ┌─────────────────────────────┐
-│ Gen3C_CameraTrajectory      │
-│ + Gen3CDiffusion            │
+│ Gen3C_Camera → Gen3CDiffusion│
 └──────────┬──────────────────┘
-           │ images, trajectory
+           │ images, latents
            ▼
 ┌─────────────────────────────┐
-│ Cosmos_Gen3C_InferExport    │
-│ - write_to_disk: TRUE       │  <-- Need disk for validator
+│ Gen3C_Export                │
+│ - write_to_disk: TRUE       │  <-- Need disk for quality checks
 └──────────┬──────────────────┘
            │ dataset_dir, trajectory
-           ├──────────────────────┐
-           │                      │
-           ▼                      ▼
-┌──────────────────────┐  ┌─────────────────────┐
-│ Gen3C_DatasetValidator│  │ Gen3C_QualityFilter │
-│ - min_frames: 10     │  │ - quality_threshold │
-└──────────┬───────────┘  └──────────┬──────────┘
-           │                         │ filtered_trajectory
-           │ quality_score           │
-           │                         ▼
-           │              ┌─────────────────────┐
-           │              │ Cosmos_Gen3C_InferExport │ (re-export filtered)
-           │              │ - write_to_disk: FALSE ⭐│
-           │              └──────────┬──────────┘
-           │                         │ dataset
-           └─────────────────────────┤
-                                     ▼
-                          ┌─────────────────────┐
-                          │ SplatTrainer_gsplat │
-                          └──────────┬──────────┘
-                                     ▼
-                                point_cloud.ply
+           ▼
+┌─────────────────────────────┐
+│ Gen3C_Quality               │  ⭐ All-in-one quality control!
+│ - mode: "all"               │     (validate + filter + analyze + preview)
+│ - dataset_path: dataset_dir │
+└──────────┬──────────────────┘
+           │ filtered_trajectory, quality_score, report
+           ▼
+┌─────────────────────────────┐
+│ Gen3C_Export                │  Re-export with filtered trajectory
+│ - trajectory: filtered      │
+│ - write_to_disk: FALSE      │
+└──────────┬──────────────────┘
+           │ dataset
+           ▼
+┌─────────────────────────────┐
+│ SplatTrainer_gsplat         │
+└──────────┬──────────────────┘
+           ▼
+       point_cloud.ply
 ```
+
+**Benefits:** One quality node replaces 4 separate validation/filter/analysis nodes!
 
 ---
 

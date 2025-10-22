@@ -537,13 +537,9 @@ class Gen3CPoseDepthFromImages:
 
 
 NODE_CLASS_MAPPINGS = {
-    "Gen3C_PoseRecovery": Gen3CPoseRecovery,  # New unified node
-    "Gen3C_PoseDepth_FromVideo": Gen3CPoseDepthFromVideo,  # Legacy - for backward compatibility
-    "Gen3C_PoseDepth_FromImages": Gen3CPoseDepthFromImages,  # Legacy - for backward compatibility
+    "Gen3C_PoseRecovery": Gen3CPoseRecovery,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "Gen3C_PoseRecovery": "GEN3C Pose Recovery (Unified)",
-    "Gen3C_PoseDepth_FromVideo": "GEN3C Pose Recovery (Video) [Legacy]",
-    "Gen3C_PoseDepth_FromImages": "GEN3C Pose Recovery (Images) [Legacy]",
+    "Gen3C_PoseRecovery": "GEN3C Pose Recovery",
 }

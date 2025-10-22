@@ -415,14 +415,141 @@ class Gen3CVideoToDataset(BaseDatasetExporter):
             return ("", trajectory, confidence, f"Export failed: {str(e)}", dummy_dataset)
 
 
+class Gen3CExport(BaseDatasetExporter):
+    """Unified export node that auto-detects input type and handles all export scenarios."""
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "output_dir": ("STRING", {"default": "${output_dir}/gen3c_dataset", "tooltip": "Directory path for saving dataset files"}),
+                "write_to_disk": ("BOOLEAN", {"default": True, "tooltip": "Enable to write dataset files to disk; disable to pass data directly to trainer"}),
+            },
+            "optional": {
+                # Cosmos inference outputs
+                "images": ("IMAGE", {"tooltip": "RGB frames from Cosmos/GEN3C inference (F, H, W, C)"}),
+                "latents": ("LATENT", {"tooltip": "Cosmos latent dict with embedded camera trajectory"}),
+                "trajectory": ("GEN3C_TRAJECTORY", {"tooltip": "Explicit camera trajectory (overrides latent trajectory)"}),
+
+                # Video input
+                "video_path": ("STRING", {"default": "", "tooltip": "Path to video file for pose recovery workflow"}),
+                "max_frames": ("INT", {"default": 50, "min": 2, "max": 500, "tooltip": "Max frames to extract from video"}),
+                "backend": (["auto", "colmap", "vipe"], {"default": "auto", "tooltip": "Pose recovery backend"}),
+                "estimate_depth": ("BOOLEAN", {"default": True, "tooltip": "Enable depth estimation during pose recovery"}),
+
+                # Common optional inputs
+                "depth_maps": ("IMAGE", {"tooltip": "Optional depth maps (F, H, W, 1)"}),
+                "metadata_json": ("STRING", {"multiline": True, "default": "{}", "tooltip": "Additional metadata as JSON"}),
+                "fps": ("INT", {"default": 24, "min": 1, "max": 120, "tooltip": "Frames per second for trajectory"}),
+            },
+        }
+
+    RETURN_TYPES = ("STRING", "GEN3C_TRAJECTORY", "GEN3C_DATASET", "FLOAT", "STRING")
+    RETURN_NAMES = ("dataset_dir", "trajectory", "dataset", "confidence", "status")
+    FUNCTION = "export"
+    CATEGORY = "GEN3C/Dataset"
+    DESCRIPTION = "Unified export node that auto-detects input type (Cosmos inference, video file, or explicit trajectory) and exports to Nerfstudio-compatible dataset. Supports both disk-based and memory-based workflows."
+
+    def export(
+        self,
+        output_dir: str,
+        write_to_disk: bool = True,
+        images: Optional[torch.Tensor] = None,
+        latents: Optional[Dict[str, Any]] = None,
+        trajectory: Optional[Dict[str, Any]] = None,
+        video_path: str = "",
+        max_frames: int = 50,
+        backend: str = "auto",
+        estimate_depth: bool = True,
+        depth_maps: Optional[torch.Tensor] = None,
+        metadata_json: str = "{}",
+        fps: int = 24,
+    ) -> Tuple[str, Dict[str, Any], Dict[str, Any], float, str]:
+
+        confidence = 1.0
+        status = "Success"
+
+        # Scenario 1: Video file path provided - run pose recovery workflow
+        if video_path and Path(video_path).exists():
+            from .dataset.recovery_nodes import Gen3CPoseRecovery
+            recovery_node = Gen3CPoseRecovery()
+
+            traj, imgs, conf, stat = recovery_node.recover_poses(
+                source_type="video_file",
+                backend=backend,
+                max_frames=max_frames,
+                estimate_depth=estimate_depth,
+                downsample_factor=0.5,
+                fps=fps,
+                video_path=video_path,
+            )
+
+            trajectory = traj
+            images = imgs
+            confidence = conf
+            status = stat
+
+        # Scenario 2: Latents provided (Cosmos output) - extract trajectory
+        elif latents is not None:
+            if trajectory is None:  # Only extract if not overridden
+                trajectory = latents.get("camera_trajectory") or latents.get("trajectory")
+                if trajectory is None:
+                    raise ValueError("No trajectory found in latents and no explicit trajectory provided.")
+
+        # Scenario 3: Neither video nor latents - must have explicit trajectory
+        elif trajectory is None:
+            raise ValueError("Must provide either: video_path, latents with trajectory, or explicit trajectory input.")
+
+        # Validate we have images
+        if images is None or images.numel() == 0:
+            dummy_trajectory = trajectory or {"fps": fps, "frames": [], "handedness": "right"}
+            dummy_dataset = {"rgb_frames": None, "depth_frames": None, "trajectory": dummy_trajectory, "metadata": {}}
+            return ("", dummy_trajectory, dummy_dataset, confidence, "No images provided")
+
+        # Now export using standard logic
+        rgb_frames = self._normalize_frames(images)
+        depth_frames = self._prepare_depth(depth_maps, rgb_frames)
+
+        # Update trajectory with actual frame dimensions if needed
+        if trajectory.get("frames"):
+            frame_height = int(rgb_frames.shape[1])
+            frame_width = int(rgb_frames.shape[2])
+            for frame_meta in trajectory["frames"]:
+                if "height" not in frame_meta or "width" not in frame_meta:
+                    frame_meta["height"] = frame_height
+                    frame_meta["width"] = frame_width
+
+        trajectory["fps"] = fps
+
+        # Build in-memory dataset structure
+        dataset_dict = {
+            "rgb_frames": rgb_frames,
+            "depth_frames": depth_frames,
+            "trajectory": trajectory,
+            "metadata": json.loads(metadata_json or "{}"),
+        }
+
+        # Optionally write to disk
+        dataset_path_str = ""
+        if write_to_disk:
+            dataset_path = Path(output_dir.replace("${output_dir}", str(Path.cwd() / "output"))).expanduser().resolve()
+            dataset_path.mkdir(parents=True, exist_ok=True)
+
+            self._write_rgb(rgb_frames, dataset_path)
+            if depth_frames is not None:
+                self._write_depth(depth_frames, dataset_path)
+
+            extra = json.loads(metadata_json or "{}")
+            self._write_transforms(trajectory, dataset_path, depth_frames is not None, extra)
+            dataset_path_str = str(dataset_path)
+
+        return (dataset_path_str, trajectory, dataset_dict, confidence, status)
+
+
 NODE_CLASS_MAPPINGS = {
-    "Cosmos_Gen3C_InferExport": CosmosGen3CInferExport,
-    "Cosmos_Gen3C_DirectExport": CosmosGen3CDirectExport,
-    "Gen3C_VideoToDataset": Gen3CVideoToDataset,
+    "Gen3C_Export": Gen3CExport,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "Cosmos_Gen3C_InferExport": "Cosmos GEN3C Export",
-    "Cosmos_Gen3C_DirectExport": "Cosmos GEN3C Direct Export",
-    "Gen3C_VideoToDataset": "GEN3C Video to Dataset",
+    "Gen3C_Export": "GEN3C Export",
 }

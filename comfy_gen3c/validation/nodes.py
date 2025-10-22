@@ -295,16 +295,174 @@ class Gen3CTrajectoryQualityAnalysis:
             return (0.0, 0.0, 0.0, 0.0, 0.0, f"Analysis failed: {str(e)}")
 
 
+class Gen3CQuality:
+    """Unified quality control node for validation, filtering, analysis, and preview."""
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "mode": (["validate", "filter", "analyze", "preview", "all"], {
+                    "default": "all",
+                    "tooltip": "Quality operation: validate dataset, filter frames, analyze trajectory, preview, or run all checks"
+                }),
+                "trajectory": ("GEN3C_TRAJECTORY", {"tooltip": "Camera trajectory for quality analysis"}),
+            },
+            "optional": {
+                "dataset_path": ("STRING", {"default": "", "tooltip": "Dataset directory path (required for validate/filter modes)"}),
+
+                # Validation settings
+                "min_frames": ("INT", {"default": 3, "min": 1, "max": 10, "tooltip": "Minimum frames required"}),
+                "max_frames": ("INT", {"default": 1000, "min": 10, "max": 10000, "tooltip": "Maximum frames allowed"}),
+
+                # Filter settings
+                "quality_threshold": ("FLOAT", {"default": 0.4, "min": 0.0, "max": 1.0, "step": 0.05, "tooltip": "Overall quality threshold"}),
+                "min_blur_threshold": ("FLOAT", {"default": 0.3, "min": 0.0, "max": 1.0, "step": 0.05, "tooltip": "Minimum blur threshold"}),
+                "min_brightness": ("FLOAT", {"default": 0.15, "min": 0.0, "max": 1.0, "step": 0.05, "tooltip": "Minimum brightness"}),
+                "max_brightness": ("FLOAT", {"default": 0.85, "min": 0.0, "max": 1.0, "step": 0.05, "tooltip": "Maximum brightness"}),
+
+                # Preview settings
+                "plot_type": (["3d", "frustums", "stats", "all"], {"default": "3d", "tooltip": "Visualization type"}),
+                "output_dir": ("STRING", {"default": "${output_dir}/quality", "tooltip": "Output directory for reports/previews"}),
+            },
+        }
+
+    RETURN_TYPES = ("GEN3C_TRAJECTORY", "FLOAT", "STRING", "IMAGE", "STRING", "INT", "INT")
+    RETURN_NAMES = ("filtered_trajectory", "quality_score", "report", "preview_image", "status", "frames_kept", "frames_removed")
+    FUNCTION = "run_quality_check"
+    CATEGORY = "GEN3C/Quality"
+    DESCRIPTION = "Unified quality control: validate datasets, filter low-quality frames, analyze trajectory metrics, and generate previews. Run individual checks or comprehensive quality pipeline."
+
+    def run_quality_check(
+        self,
+        mode: str,
+        trajectory: Dict[str, Any],
+        dataset_path: str = "",
+        min_frames: int = 3,
+        max_frames: int = 1000,
+        quality_threshold: float = 0.4,
+        min_blur_threshold: float = 0.3,
+        min_brightness: float = 0.15,
+        max_brightness: float = 0.85,
+        plot_type: str = "3d",
+        output_dir: str = "${output_dir}/quality",
+    ) -> Tuple[Dict[str, Any], float, str, torch.Tensor, str, int, int]:
+
+        filtered_trajectory = trajectory
+        quality_score = 0.0
+        report_lines = []
+        preview_image = torch.zeros(1, 400, 600, 3)
+        status = "Success"
+        frames_kept = len(trajectory.get("frames", []))
+        frames_removed = 0
+
+        output_path = Path(output_dir.replace("${output_dir}", str(Path.cwd() / "output")))
+        output_path = output_path.expanduser().resolve()
+        output_path.mkdir(parents=True, exist_ok=True)
+
+        try:
+            # Mode: Validate Dataset
+            if mode in ["validate", "all"]:
+                if dataset_path and Path(dataset_path).exists():
+                    validator = DatasetValidator(min_frames=min_frames, max_frames=max_frames)
+                    result = validator.validate_dataset(Path(dataset_path))
+                    quality_score = result.score
+
+                    report_lines.append("=== DATASET VALIDATION ===")
+                    report_lines.append(f"Status: {'PASSED' if result.is_valid else 'FAILED'}")
+                    report_lines.append(f"Quality Score: {result.score:.3f}")
+                    if result.issues:
+                        report_lines.append("Issues:")
+                        report_lines.extend([f"  - {issue}" for issue in result.issues])
+                    report_lines.append("")
+
+            # Mode: Trajectory Quality Analysis
+            if mode in ["analyze", "all"]:
+                quality_filter = QualityFilter()
+                traj_quality = quality_filter.assess_trajectory_quality(trajectory)
+
+                report_lines.append("=== TRAJECTORY ANALYSIS ===")
+                report_lines.append(f"Overall Score: {traj_quality.overall_score:.3f}")
+                report_lines.append(f"Smoothness: {traj_quality.smoothness_score:.3f}")
+                report_lines.append(f"Coverage: {traj_quality.coverage_score:.3f}")
+                report_lines.append(f"Baseline Quality: {traj_quality.baseline_score:.3f}")
+                report_lines.append(f"Rotation Diversity: {traj_quality.rotation_diversity:.3f}")
+
+                if traj_quality.issues:
+                    report_lines.append("Issues:")
+                    report_lines.extend([f"  - {issue}" for issue in traj_quality.issues])
+
+                report_lines.append("")
+                quality_score = max(quality_score, traj_quality.overall_score)
+
+            # Mode: Filter Low-Quality Frames
+            if mode in ["filter", "all"]:
+                if dataset_path and Path(dataset_path).exists():
+                    quality_filter = QualityFilter(
+                        min_blur_threshold=min_blur_threshold,
+                        min_brightness_threshold=min_brightness,
+                        max_brightness_threshold=max_brightness,
+                        min_overall_threshold=quality_threshold
+                    )
+
+                    filtered_trajectory, removed_indices = quality_filter.filter_low_quality_frames(
+                        dataset_path, trajectory, quality_threshold
+                    )
+
+                    original_count = len(trajectory.get("frames", []))
+                    frames_kept = len(filtered_trajectory.get("frames", []))
+                    frames_removed = len(removed_indices)
+
+                    report_lines.append("=== QUALITY FILTERING ===")
+                    report_lines.append(f"Original frames: {original_count}")
+                    report_lines.append(f"Frames kept: {frames_kept}")
+                    report_lines.append(f"Frames removed: {frames_removed}")
+                    report_lines.append(f"Removal rate: {frames_removed/max(original_count, 1)*100:.1f}%")
+                    report_lines.append("")
+
+            # Mode: Generate Preview
+            if mode in ["preview", "all"]:
+                try:
+                    preview = TrajectoryPreview()
+                    if plot_type == "3d":
+                        image = preview.plot_trajectory_3d(trajectory, show_frustums=True, show_path=True)
+                    elif plot_type == "frustums":
+                        image = preview.create_frustum_plot(trajectory)
+                    elif plot_type == "stats":
+                        image = preview.generate_stats_image(trajectory)
+                    else:  # "all"
+                        plots = plot_trajectory(trajectory, output_path, create_all=True)
+                        image = plots.get('3d_plot', plots.get('stats'))
+
+                    if image:
+                        import numpy as np
+                        image_array = np.array(image)
+                        preview_image = torch.from_numpy(image_array).unsqueeze(0).float() / 255.0
+                        image.save(output_path / f"trajectory_{plot_type}.png")
+                        report_lines.append(f"Preview saved to: {output_path / f'trajectory_{plot_type}.png'}")
+                except Exception as e:
+                    report_lines.append(f"Preview generation failed: {str(e)}")
+
+            # Save comprehensive report
+            if mode == "all":
+                report_path = output_path / "quality_report.txt"
+                with open(report_path, 'w') as f:
+                    f.write("\n".join(report_lines))
+                report_lines.append(f"\nFull report saved to: {report_path}")
+
+            report = "\n".join(report_lines) if report_lines else "No operations performed"
+
+        except Exception as e:
+            status = f"Error: {str(e)}"
+            report = f"Quality check failed: {str(e)}"
+
+        return (filtered_trajectory, quality_score, report, preview_image, status, frames_kept, frames_removed)
+
+
 NODE_CLASS_MAPPINGS = {
-    "Gen3C_DatasetValidator": Gen3CDatasetValidator,
-    "Gen3C_TrajectoryPreview": Gen3CTrajectoryPreview,
-    "Gen3C_QualityFilter": Gen3CQualityFilter,
-    "Gen3C_TrajectoryQualityAnalysis": Gen3CTrajectoryQualityAnalysis,
+    "Gen3C_Quality": Gen3CQuality,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "Gen3C_DatasetValidator": "GEN3C Dataset Validator",
-    "Gen3C_TrajectoryPreview": "GEN3C Trajectory Preview",
-    "Gen3C_QualityFilter": "GEN3C Quality Filter",
-    "Gen3C_TrajectoryQualityAnalysis": "GEN3C Trajectory Quality Analysis",
+    "Gen3C_Quality": "GEN3C Quality",
 }
