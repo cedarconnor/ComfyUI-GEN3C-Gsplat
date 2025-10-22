@@ -9,6 +9,14 @@ import torch
 import numpy as np
 
 from .pose_depth import estimate_from_video, estimate_from_images, RecoveryConfig
+from .trajectory_utils import (
+    pose_result_to_trajectory,
+    extract_frame_size_from_images,
+    extract_frame_size_from_path,
+)
+from ..utils import create_dummy_trajectory, validate_path_exists
+from ..exceptions import Gen3CInvalidInputError
+from ..constants import DEFAULT_FPS, DEFAULT_HEIGHT, DEFAULT_WIDTH
 
 
 class Gen3CPoseDepthFromVideo:
@@ -36,55 +44,6 @@ class Gen3CPoseDepthFromVideo:
     CATEGORY = "GEN3C/Recovery"
     DESCRIPTION = "Recover camera poses from video using COLMAP or ViPE structure-from-motion. Outputs trajectory compatible with splat trainers and quality validators. Requires COLMAP installed."
 
-    def _result_to_trajectory(
-        self,
-        result,
-        video_path: str,
-        max_frames: int
-    ) -> Dict[str, Any]:
-        """Convert PoseDepthResult to GEN3C trajectory format."""
-        poses = result.poses  # (N, 4, 4)
-        intrinsics = result.intrinsics  # (3, 3) or (N, 3, 3)
-
-        # Handle single intrinsics matrix
-        if intrinsics.ndim == 2:
-            intrinsics = intrinsics.unsqueeze(0).repeat(poses.shape[0], 1, 1)
-
-        frames_data = []
-        for i in range(poses.shape[0]):
-            pose_matrix = poses[i].numpy().tolist()
-            K = intrinsics[i].numpy()
-
-            # Extract intrinsic parameters
-            fx, fy = float(K[0, 0]), float(K[1, 1])
-            cx, cy = float(K[0, 2]), float(K[1, 2])
-
-            # Assume default resolution if not available
-            width, height = 1024, 576
-
-            frame_data = {
-                "frame": i,
-                "width": width,
-                "height": height,
-                "near": 0.01,
-                "far": 1000.0,
-                "intrinsics": [[fx, 0.0, cx], [0.0, fy, cy], [0.0, 0.0, 1.0]],
-                "extrinsics": {
-                    "camera_to_world": pose_matrix,
-                    "world_to_camera": np.linalg.inv(poses[i].numpy()).tolist()
-                }
-            }
-            frames_data.append(frame_data)
-
-        trajectory = {
-            "fps": 24,  # Default FPS
-            "frames": frames_data,
-            "handedness": "right",
-            "source": f"pose_recovery_{Path(video_path).stem}",
-            "confidence": result.confidence
-        }
-
-        return trajectory
 
     def _extract_frames_as_images(self, video_path: str, max_frames: int) -> torch.Tensor:
         """Extract frames from video and return as ComfyUI IMAGE tensor."""
@@ -92,11 +51,11 @@ class Gen3CPoseDepthFromVideo:
             import cv2
         except ImportError:
             # Return dummy images if OpenCV not available
-            return torch.zeros(max_frames, 576, 1024, 3)
+            return torch.zeros(max_frames, DEFAULT_HEIGHT, DEFAULT_WIDTH, 3)
 
         cap = cv2.VideoCapture(video_path)
         if not cap.isOpened():
-            return torch.zeros(max_frames, 576, 1024, 3)
+            return torch.zeros(max_frames, DEFAULT_HEIGHT, DEFAULT_WIDTH, 3)
 
         total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
         frame_step = max(1, total_frames // max_frames)
@@ -122,7 +81,7 @@ class Gen3CPoseDepthFromVideo:
         cap.release()
 
         if not frames:
-            return torch.zeros(max_frames, 576, 1024, 3)
+            return torch.zeros(max_frames, DEFAULT_HEIGHT, DEFAULT_WIDTH, 3)
 
         # Stack frames and ensure correct shape (F, H, W, C)
         frames_tensor = torch.stack(frames)
@@ -137,17 +96,18 @@ class Gen3CPoseDepthFromVideo:
         downsample_factor: float,
         matcher_type: str = "exhaustive",
         refinement_iterations: int = 3,
+        fps_override: Optional[int] = None,
     ) -> Tuple[Dict[str, Any], torch.Tensor, float, str]:
 
-        if not video_path or not Path(video_path).exists():
-            dummy_trajectory = {
-                "fps": 24,
-                "frames": [],
-                "handedness": "right",
-                "source": "dummy"
-            }
-            dummy_images = torch.zeros(1, 576, 1024, 3)
-            return (dummy_trajectory, dummy_images, 0.0, "Video file not found")
+        fallback_fps = fps_override if fps_override is not None else DEFAULT_FPS
+
+        # Validate video path
+        try:
+            validate_path_exists(video_path, "Video file")
+        except Gen3CInvalidInputError as e:
+            dummy_trajectory = create_dummy_trajectory(fps=fallback_fps, source="error")
+            dummy_images = torch.zeros(1, DEFAULT_HEIGHT, DEFAULT_WIDTH, 3)
+            return (dummy_trajectory, dummy_images, 0.0, str(e))
 
         # Configure recovery
         config = RecoveryConfig(
@@ -160,14 +120,22 @@ class Gen3CPoseDepthFromVideo:
         )
 
         try:
+            # Extract images (for dataset output)
+            images = self._extract_frames_as_images(video_path, max_frames)
+
+            # Infer frame dimensions using utility
+            frame_size = extract_frame_size_from_images(images)
+
             # Run pose recovery
             result = estimate_from_video(Path(video_path), config)
 
-            # Convert to trajectory format
-            trajectory = self._result_to_trajectory(result, video_path, max_frames)
-
-            # Extract images for output
-            images = self._extract_frames_as_images(video_path, max_frames)
+            # Convert to trajectory format using shared utility
+            trajectory = pose_result_to_trajectory(
+                result,
+                fps=fallback_fps,
+                source_name=f"pose_recovery_{Path(video_path).stem}",
+                frame_size=frame_size,
+            )
 
             status = "Success" if result.confidence > 0.3 else f"Low confidence: {result.confidence:.2f}"
             if result.error_message:
@@ -176,13 +144,8 @@ class Gen3CPoseDepthFromVideo:
             return (trajectory, images, result.confidence, status)
 
         except Exception as e:
-            dummy_trajectory = {
-                "fps": 24,
-                "frames": [],
-                "handedness": "right",
-                "source": "failed"
-            }
-            dummy_images = torch.zeros(1, 576, 1024, 3)
+            dummy_trajectory = create_dummy_trajectory(fps=fallback_fps, source="failed")
+            dummy_images = torch.zeros(1, DEFAULT_HEIGHT, DEFAULT_WIDTH, 3)
             return (dummy_trajectory, dummy_images, 0.0, f"Recovery failed: {str(e)}")
 
 
@@ -240,63 +203,6 @@ class Gen3CPoseDepthFromImages:
 
         return image_paths
 
-    def _result_to_trajectory(
-        self,
-        result,
-        image_paths: List[Path],
-        fps: int
-    ) -> Dict[str, Any]:
-        """Convert PoseDepthResult to GEN3C trajectory format."""
-        poses = result.poses  # (N, 4, 4)
-        intrinsics = result.intrinsics  # (3, 3) or (N, 3, 3)
-
-        # Handle single intrinsics matrix
-        if intrinsics.ndim == 2:
-            intrinsics = intrinsics.unsqueeze(0).repeat(poses.shape[0], 1, 1)
-
-        frames_data = []
-        for i in range(poses.shape[0]):
-            pose_matrix = poses[i].numpy().tolist()
-            K = intrinsics[i].numpy()
-
-            # Extract intrinsic parameters
-            fx, fy = float(K[0, 0]), float(K[1, 1])
-            cx, cy = float(K[0, 2]), float(K[1, 2])
-
-            # Try to get image dimensions from first image
-            if i < len(image_paths):
-                try:
-                    from PIL import Image
-                    img = Image.open(image_paths[i])
-                    width, height = img.size
-                except:
-                    width, height = 1024, 576
-            else:
-                width, height = 1024, 576
-
-            frame_data = {
-                "frame": i,
-                "width": width,
-                "height": height,
-                "near": 0.01,
-                "far": 1000.0,
-                "intrinsics": [[fx, 0.0, cx], [0.0, fy, cy], [0.0, 0.0, 1.0]],
-                "extrinsics": {
-                    "camera_to_world": pose_matrix,
-                    "world_to_camera": np.linalg.inv(poses[i].numpy()).tolist()
-                }
-            }
-            frames_data.append(frame_data)
-
-        trajectory = {
-            "fps": fps,
-            "frames": frames_data,
-            "handedness": "right",
-            "source": "pose_recovery_images",
-            "confidence": result.confidence
-        }
-
-        return trajectory
 
     def recover_poses(
         self,
@@ -306,16 +212,11 @@ class Gen3CPoseDepthFromImages:
         downsample_factor: float,
         matcher_type: str = "exhaustive",
         refinement_iterations: int = 3,
-        fps: int = 24,
+        fps: int = DEFAULT_FPS,
     ) -> Tuple[Dict[str, Any], float, str]:
 
         if images.numel() == 0:
-            dummy_trajectory = {
-                "fps": fps,
-                "frames": [],
-                "handedness": "right",
-                "source": "dummy"
-            }
+            dummy_trajectory = create_dummy_trajectory(fps=fps, source="no_input")
             return (dummy_trajectory, 0.0, "No input images")
 
         # Configure recovery
@@ -333,18 +234,22 @@ class Gen3CPoseDepthFromImages:
             image_paths = self._images_to_paths(images)
 
             if len(image_paths) < 2:
-                return ({
-                    "fps": fps,
-                    "frames": [],
-                    "handedness": "right",
-                    "source": "insufficient_images"
-                }, 0.0, "Need at least 2 images for SfM")
+                dummy_trajectory = create_dummy_trajectory(fps=fps, source="insufficient_images")
+                return (dummy_trajectory, 0.0, "Need at least 2 images for SfM")
 
             # Run pose recovery
             result = estimate_from_images(image_paths, config)
 
-            # Convert to trajectory format
-            trajectory = self._result_to_trajectory(result, image_paths, fps)
+            # Get frame size from first image path
+            frame_size = extract_frame_size_from_path(image_paths[0])
+
+            # Convert to trajectory format using shared utility
+            trajectory = pose_result_to_trajectory(
+                result,
+                fps=fps,
+                source_name="pose_recovery_images",
+                frame_size=frame_size,
+            )
 
             status = "Success" if result.confidence > 0.3 else f"Low confidence: {result.confidence:.2f}"
             if result.error_message:
@@ -357,12 +262,7 @@ class Gen3CPoseDepthFromImages:
             return (trajectory, result.confidence, status)
 
         except Exception as e:
-            dummy_trajectory = {
-                "fps": fps,
-                "frames": [],
-                "handedness": "right",
-                "source": "failed"
-            }
+            dummy_trajectory = create_dummy_trajectory(fps=fps, source="failed")
             return (dummy_trajectory, 0.0, f"Recovery failed: {str(e)}")
 
 

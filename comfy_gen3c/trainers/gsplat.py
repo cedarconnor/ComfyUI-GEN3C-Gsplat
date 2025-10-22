@@ -71,13 +71,28 @@ def _load_depth(path: Path, depth_scale: float) -> torch.Tensor:
 
 
 def _read_pfm(path: Path) -> np.ndarray:
+    """Read PFM (Portable Float Map) file format.
+
+    Args:
+        path: Path to PFM file
+
+    Returns:
+        Depth array as float32
+
+    Raises:
+        ValueError: If file format is invalid
+    """
     with path.open("rb") as fh:
-        header = fh.readline().decode("ascii").strip()
-        color = header == "PF"
-        dims = fh.readline().decode("ascii").strip()
-        width, height = map(int, dims.split())
-        scale = float(fh.readline().decode("ascii").strip())
-        data = np.fromfile(fh, "<f" if scale < 0 else ">f")
+        try:
+            header = fh.readline().decode("ascii").strip()
+            color = header == "PF"
+            dims = fh.readline().decode("ascii").strip()
+            width, height = map(int, dims.split())
+            scale = float(fh.readline().decode("ascii").strip())
+            data = np.fromfile(fh, "<f" if scale < 0 else ">f")
+        except (ValueError, UnicodeDecodeError) as e:
+            raise ValueError(f"Invalid PFM file format: {e}") from e
+
         shape = (height, width, 3) if color else (height, width)
         data = np.reshape(data, shape)
         data = np.flipud(data)
@@ -238,43 +253,98 @@ def _write_ply(
     opacity: torch.Tensor,
     scales: torch.Tensor,
     quats: torch.Tensor,
+    binary: bool = True,
 ) -> None:
-    xyz = xyz.detach().cpu().numpy()
+    """Write Gaussian splat parameters to PLY file.
+
+    Args:
+        path: Output file path
+        xyz: Position tensor (N, 3)
+        colors: Color tensor (N, 3)
+        opacity: Opacity tensor (N, 1)
+        scales: Scale tensor (N, 3)
+        quats: Quaternion tensor (N, 4)
+        binary: Write binary PLY (much faster) vs ASCII
+    """
+    xyz = xyz.detach().cpu().numpy().astype(np.float32)
     colors = (colors.detach().cpu().clamp(0.0, 1.0) * 255.0).numpy().astype(np.uint8)
-    opacity = opacity.detach().cpu().numpy()
-    scales = scales.detach().cpu().numpy()
-    quats = quats.detach().cpu().numpy()
+    opacity = opacity.detach().cpu().numpy().astype(np.float32).squeeze()
+    scales = scales.detach().cpu().numpy().astype(np.float32)
+    quats = quats.detach().cpu().numpy().astype(np.float32)
 
     count = xyz.shape[0]
-    with path.open("w", encoding="ascii") as fh:
-        fh.write("ply\n")
-        fh.write("format ascii 1.0\n")
-        fh.write(f"element vertex {count}\n")
-        fh.write("property float x\n")
-        fh.write("property float y\n")
-        fh.write("property float z\n")
-        fh.write("property uchar red\n")
-        fh.write("property uchar green\n")
-        fh.write("property uchar blue\n")
-        fh.write("property float opacity\n")
-        fh.write("property float scale_x\n")
-        fh.write("property float scale_y\n")
-        fh.write("property float scale_z\n")
-        fh.write("property float quat_w\n")
-        fh.write("property float quat_x\n")
-        fh.write("property float quat_y\n")
-        fh.write("property float quat_z\n")
-        fh.write("end_header\n")
-        for i in range(count):
-            x, y, z = xyz[i]
-            r, g, b = colors[i]
-            alpha = float(opacity[i])
-            sx, sy, sz = scales[i]
-            qw, qx, qy, qz = quats[i]
-            fh.write(
-                f"{x:.6f} {y:.6f} {z:.6f} {int(r)} {int(g)} {int(b)} {alpha:.6f} "
-                f"{sx:.6f} {sy:.6f} {sz:.6f} {qw:.6f} {qx:.6f} {qy:.6f} {qz:.6f}\n"
+
+    if binary:
+        # Binary PLY - 10-100x faster for large point clouds
+        import struct
+
+        with path.open("wb") as fh:
+            # Write ASCII header
+            header = (
+                "ply\n"
+                "format binary_little_endian 1.0\n"
+                f"element vertex {count}\n"
+                "property float x\n"
+                "property float y\n"
+                "property float z\n"
+                "property uchar red\n"
+                "property uchar green\n"
+                "property uchar blue\n"
+                "property float opacity\n"
+                "property float scale_x\n"
+                "property float scale_y\n"
+                "property float scale_z\n"
+                "property float quat_w\n"
+                "property float quat_x\n"
+                "property float quat_y\n"
+                "property float quat_z\n"
+                "end_header\n"
             )
+            fh.write(header.encode("ascii"))
+
+            # Write binary data
+            for i in range(count):
+                # Pack: 3 floats (xyz) + 3 bytes (rgb) + 8 floats (opacity, scales, quats)
+                vertex_data = struct.pack(
+                    "<fffBBBfffffff",
+                    xyz[i, 0], xyz[i, 1], xyz[i, 2],
+                    colors[i, 0], colors[i, 1], colors[i, 2],
+                    opacity[i],
+                    scales[i, 0], scales[i, 1], scales[i, 2],
+                    quats[i, 0], quats[i, 1], quats[i, 2], quats[i, 3],
+                )
+                fh.write(vertex_data)
+    else:
+        # ASCII PLY - slower but human-readable
+        with path.open("w", encoding="ascii") as fh:
+            fh.write("ply\n")
+            fh.write("format ascii 1.0\n")
+            fh.write(f"element vertex {count}\n")
+            fh.write("property float x\n")
+            fh.write("property float y\n")
+            fh.write("property float z\n")
+            fh.write("property uchar red\n")
+            fh.write("property uchar green\n")
+            fh.write("property uchar blue\n")
+            fh.write("property float opacity\n")
+            fh.write("property float scale_x\n")
+            fh.write("property float scale_y\n")
+            fh.write("property float scale_z\n")
+            fh.write("property float quat_w\n")
+            fh.write("property float quat_x\n")
+            fh.write("property float quat_y\n")
+            fh.write("property float quat_z\n")
+            fh.write("end_header\n")
+            for i in range(count):
+                x, y, z = xyz[i]
+                r, g, b = colors[i]
+                alpha = float(opacity[i])
+                sx, sy, sz = scales[i]
+                qw, qx, qy, qz = quats[i]
+                fh.write(
+                    f"{x:.6f} {y:.6f} {z:.6f} {int(r)} {int(g)} {int(b)} {alpha:.6f} "
+                    f"{sx:.6f} {sy:.6f} {sz:.6f} {qw:.6f} {qx:.6f} {qy:.6f} {qz:.6f}\n"
+                )
 
 
 class SplatTrainerGsplat:
@@ -292,6 +362,7 @@ class SplatTrainerGsplat:
                 "frames_per_batch": ("INT", {"default": 1, "min": 1, "max": 8, "tooltip": "Number of frames per training batch (higher uses more VRAM)"}),
                 "depth_scale": ("FLOAT", {"default": 1.0, "min": 1e-3, "max": 1000.0, "step": 1e-3, "tooltip": "Scale factor for depth values (adjust if depth units are off)"}),
                 "device": (("auto", "cuda", "cpu"), {"default": "auto", "tooltip": "Training device: 'auto' selects CUDA if available"}),
+                "ply_format": (("binary", "ascii"), {"default": "binary", "tooltip": "PLY output format: binary (fast, compact) or ascii (human-readable)"}),
             },
             "optional": {
                 "dataset_dir": ("STRING", {"tooltip": "Optional: Path to dataset directory with transforms.json (for disk-based workflow)"}),
@@ -403,6 +474,7 @@ class SplatTrainerGsplat:
         frames_per_batch: int,
         depth_scale: float,
         device: str,
+        ply_format: str,
         dataset_dir: str = "",
         dataset: Optional[Dict[str, Any]] = None,
         block_width: int = 16,
@@ -453,6 +525,14 @@ class SplatTrainerGsplat:
                 path_parts.insert(0, extra)
         os.environ["PATH"] = os.pathsep.join(path_parts)
 
+        missing_depth_frames = sum(1 for frame in frames if frame.depth is None)
+        invalid_depth_frames = sum(
+            1
+            for frame in frames
+            if frame.depth is not None
+            and not torch.any(frame.depth.detach().float().cpu() > 0.0)
+        )
+
         points, colors, used_fallback = _prepare_points(
             frames,
             fx=fx,
@@ -469,6 +549,10 @@ class SplatTrainerGsplat:
             if missing_depth_frames > 0:
                 print(
                     f"[gsplat] Using fallback point initialisation for {missing_depth_frames} frame(s) without depth maps."
+                )
+            elif invalid_depth_frames > 0:
+                print(
+                    f"[gsplat] Using fallback point initialisation because {invalid_depth_frames} depth map(s) contained no valid samples."
                 )
             else:
                 print("[gsplat] Using fallback point initialisation because available depth maps had no valid samples.")
@@ -571,7 +655,15 @@ class SplatTrainerGsplat:
         final_scales = torch.exp(log_scales)
         final_quats = _normalize_quaternions(quat_params)
         final_opacity = torch.sigmoid(logit_opacity)
-        _write_ply(ply_path, means, color_params, final_opacity, final_scales, final_quats)
+        _write_ply(
+            ply_path,
+            means,
+            color_params,
+            final_opacity,
+            final_scales,
+            final_quats,
+            binary=(ply_format == "binary")
+        )
 
         return (str(ply_path),)
 

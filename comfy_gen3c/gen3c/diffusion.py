@@ -114,10 +114,19 @@ class Gen3CDiffusion:
 
         # Extract samples and decode to images
         samples = result["samples"]
-        latent_out = {"samples": samples}
+        trajectory_payload = result.get("trajectory", camera_trajectory)
+        latent_out = {
+            "samples": samples,
+            "camera_trajectory": trajectory_payload,
+            "trajectory": trajectory_payload,
+        }
+        if "camera_transforms" in result:
+            latent_out["camera_transforms"] = result["camera_transforms"]
+        if "intrinsics" in result:
+            latent_out["intrinsics"] = result["intrinsics"]
         images = self._decode_to_images(lyra_model, samples)
 
-        return (latent_out, images, camera_trajectory)
+        return (latent_out, images, latent_out["camera_trajectory"])
 
 
 NODE_CLASS_MAPPINGS = {

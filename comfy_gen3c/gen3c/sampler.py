@@ -172,6 +172,7 @@ def sample_cosmos(
     return {
         "samples": samples.to(torch.device("cpu")),
         "trajectory": trajectory,
+        "camera_trajectory": trajectory,
         "camera_transforms": trajectory_cond["camera_transforms"].cpu(),
         "intrinsics": trajectory_cond["intrinsics"].cpu(),
     }

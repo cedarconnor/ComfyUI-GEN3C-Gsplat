@@ -244,7 +244,10 @@ class CosmosGen3CDirectExport(BaseDatasetExporter):
     @staticmethod
     def _extract_trajectory_from_latents(latents: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """Extract embedded trajectory from latent dict."""
-        return latents.get("camera_trajectory")
+        trajectory = latents.get("camera_trajectory")
+        if trajectory is None:
+            trajectory = latents.get("trajectory")
+        return trajectory
 
     def export_dataset(
         self,
@@ -348,6 +351,7 @@ class Gen3CVideoToDataset(BaseDatasetExporter):
             backend=backend,
             estimate_depth=estimate_depth,
             downsample_factor=downsample_factor,
+            fps_override=fps,
         )
 
         if confidence < 0.1:
@@ -360,6 +364,14 @@ class Gen3CVideoToDataset(BaseDatasetExporter):
                 return ("", trajectory, confidence, "No frames extracted from video", dummy_dataset)
 
             rgb_frames = self._normalize_frames(images)
+
+            if trajectory.get("frames"):
+                frame_height = int(rgb_frames.shape[1])
+                frame_width = int(rgb_frames.shape[2])
+                for frame_meta in trajectory["frames"]:
+                    frame_meta["height"] = frame_height
+                    frame_meta["width"] = frame_width
+            trajectory["fps"] = fps
 
             # Prepare depth maps with error handling
             try:

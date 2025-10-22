@@ -523,6 +523,10 @@ def generate_trajectory(
     hemisphere_elevation: float = 60.0,
     keyframes_json: Optional[str] = None,
 ) -> List[CameraFrame]:
+    # Validate inputs
+    if total_frames < 1:
+        raise ValueError(f"total_frames must be >= 1, got {total_frames}")
+
     up = np.array([0.0, 1.0, 0.0], dtype=np.float64)
     target = np.array([0.0, 0.0, 0.0], dtype=np.float64)
 

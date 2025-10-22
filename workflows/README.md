@@ -13,6 +13,7 @@ This directory contains example workflows demonstrating different use cases for 
 - GEN3C video generation with trajectory injection
 - Trajectory visualization and validation
 - Direct export to Nerfstudio format
+- Direct-to-trainer memory workflow via the `dataset` output
 - Gaussian splat training
 
 **Best For**:
@@ -36,6 +37,7 @@ This directory contains example workflows demonstrating different use cases for 
 - Trajectory quality analysis
 - Frame quality filtering
 - Pose recovery confidence scoring
+- Exports transforms with the requested FPS and recovered frame resolution
 
 **Best For**:
 - Converting existing footage
@@ -80,6 +82,8 @@ This directory contains example workflows demonstrating different use cases for 
 2. Open ComfyUI and load the workflow via "Load Workflow"
 3. Adjust node parameters according to your specific needs
 4. Ensure all required model files and dependencies are available
+5. For the basic GEN3C pipeline, choose whether `Cosmos_Gen3C_DirectExport` feeds `SplatTrainer_gsplat` via
+   the in-memory `dataset` socket (no intermediate files) or `dataset_dir` when you want the dataset on disk
 
 ### Common Parameters to Adjust
 
@@ -93,6 +97,7 @@ This directory contains example workflows demonstrating different use cases for 
 - `video_path`: Path to input video file
 - `max_frames`: Limit number of frames processed
 - `downsample_factor`: Reduce resolution for faster processing
+- `fps`: Target frame rate to embed in exported transforms
 
 **For Quality Control**:
 - `quality_threshold`: Minimum frame quality score
@@ -104,6 +109,7 @@ This directory contains example workflows demonstrating different use cases for 
 - Gaussian splats: `${output_dir}/splat_output.ply`
 - Quality reports: `${output_dir}/quality_analysis/`
 - Trajectory previews: `${output_dir}/trajectory_preview/`
+- In-memory datasets: available directly from the `dataset` socket on export nodes when `write_to_disk` is disabled
 
 ## Troubleshooting
 

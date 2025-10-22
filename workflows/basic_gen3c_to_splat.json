@@ -1,6 +1,6 @@
 {
   "workflow_name": "Basic GEN3C to Gaussian Splat",
-  "description": "Complete workflow from prompt to Gaussian splat using explicit camera control",
+  "description": "End-to-end pipeline from text prompt to Gaussian splat using the in-memory direct export path.",
   "nodes": [
     {
       "id": 1,
@@ -64,9 +64,10 @@
       "inputs": {
         "images": ["node:3", "images"],
         "latents": ["node:3", "latents"],
-        "output_dir": "${output_dir}/gen3c_dataset"
+        "output_dir": "${output_dir}/gen3c_dataset",
+        "write_to_disk": true
       },
-      "outputs": ["dataset_dir", "trajectory"]
+      "outputs": ["dataset_dir", "trajectory", "dataset"]
     },
     {
       "id": 6,
@@ -83,14 +84,17 @@
       "type": "SplatTrainer_gsplat",
       "pos": [1000, 400],
       "inputs": {
-        "dataset_path": ["node:5", "dataset_dir"],
-        "output_path": "${output_dir}/splat_output.ply",
-        "iterations": 3000,
+        "output_dir": "${output_dir}/gsplat_runs",
+        "run_name": "gen3c_demo",
+        "max_iterations": 3000,
         "learning_rate": 0.01,
-        "batch_size": 1,
-        "enable_sh": true
+        "points_per_frame": 50000,
+        "frames_per_batch": 1,
+        "depth_scale": 1.0,
+        "device": "auto",
+        "dataset": ["node:5", "dataset"]
       },
-      "outputs": ["ply_path", "training_log"]
+      "outputs": ["ply_path"]
     }
   ],
   "connections": [
@@ -100,16 +104,10 @@
     {"from": "node:3.images", "to": "node:5.images"},
     {"from": "node:3.latents", "to": "node:5.latents"},
     {"from": "node:5.dataset_dir", "to": "node:6.dataset_path"},
-    {"from": "node:5.dataset_dir", "to": "node:7.dataset_path"}
+    {"from": "node:5.dataset", "to": "node:7.dataset"}
   ],
   "notes": [
-    "This workflow demonstrates the complete GEN3C pipeline:",
-    "1. Generate camera trajectory",
-    "2. Load GEN3C models",
-    "3. Generate video with camera control",
-    "4. Preview trajectory",
-    "5. Export dataset",
-    "6. Validate dataset quality",
-    "7. Train Gaussian splat"
+    "This workflow demonstrates the direct in-memory export: feed the dataset output from Cosmos_Gen3C_DirectExport straight into SplatTrainer_gsplat.dataset.",
+    "write_to_disk is enabled by default so the validator can inspect the dataset; toggle it off for a zero-copy training loop and switch validation to the in-memory path if desired."
   ]
 }
