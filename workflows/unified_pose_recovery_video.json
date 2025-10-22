@@ -1,0 +1,137 @@
+{
+  "last_node_id": 5,
+  "last_link_id": 8,
+  "nodes": [
+    {
+      "id": 1,
+      "type": "Gen3C_PoseRecovery",
+      "pos": [100, 100],
+      "size": [400, 400],
+      "flags": {},
+      "order": 0,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {"name": "trajectory", "type": "GEN3C_TRAJECTORY", "links": [1], "slot_index": 0},
+        {"name": "images", "type": "IMAGE", "links": [2], "slot_index": 1},
+        {"name": "confidence", "type": "FLOAT", "links": [3], "slot_index": 2},
+        {"name": "status", "type": "STRING", "links": [4], "slot_index": 3}
+      ],
+      "properties": {"Node name for S&R": "Gen3C_PoseRecovery"},
+      "widgets_values": [
+        "video_file",
+        "auto",
+        50,
+        true,
+        0.5,
+        24,
+        "C:/path/to/your/video.mp4",
+        null,
+        "exhaustive",
+        3
+      ],
+      "title": "Unified Pose Recovery"
+    },
+    {
+      "id": 2,
+      "type": "CosmosGen3CDirectExport",
+      "pos": [600, 100],
+      "size": [350, 250],
+      "flags": {},
+      "order": 1,
+      "mode": 0,
+      "inputs": [
+        {"name": "trajectory", "type": "GEN3C_TRAJECTORY", "link": 1},
+        {"name": "rgb_frames", "type": "IMAGE", "link": 2}
+      ],
+      "outputs": [
+        {"name": "dataset_dir", "type": "STRING", "links": [5]},
+        {"name": "trajectory", "type": "GEN3C_TRAJECTORY", "links": [6]},
+        {"name": "dataset", "type": "GEN3C_DATASET", "links": [7]}
+      ],
+      "properties": {"Node name for S&R": "CosmosGen3CDirectExport"},
+      "widgets_values": [
+        "${output_dir}/recovered_dataset",
+        "recovered_scene",
+        true,
+        "npy"
+      ]
+    },
+    {
+      "id": 3,
+      "type": "SplatTrainer_gsplat",
+      "pos": [1000, 100],
+      "size": [350, 500],
+      "flags": {},
+      "order": 2,
+      "mode": 0,
+      "inputs": [
+        {"name": "dataset", "type": "GEN3C_DATASET", "link": 7}
+      ],
+      "outputs": [
+        {"name": "ply_path", "type": "STRING", "links": [8]}
+      ],
+      "properties": {"Node name for S&R": "SplatTrainer_gsplat"},
+      "widgets_values": [
+        "${output_dir}/gsplat_runs",
+        "recovered_splat",
+        1000,
+        0.005,
+        50000,
+        1,
+        1.0,
+        "auto",
+        "binary",
+        "",
+        null,
+        16
+      ]
+    },
+    {
+      "id": 4,
+      "type": "ShowText",
+      "pos": [600, 400],
+      "size": [300, 100],
+      "flags": {},
+      "order": 3,
+      "mode": 0,
+      "inputs": [
+        {"name": "text", "type": "STRING", "link": 4}
+      ],
+      "outputs": [],
+      "properties": {},
+      "widgets_values": [""],
+      "title": "Recovery Status"
+    },
+    {
+      "id": 5,
+      "type": "ShowText",
+      "pos": [1000, 650],
+      "size": [300, 100],
+      "flags": {},
+      "order": 4,
+      "mode": 0,
+      "inputs": [
+        {"name": "text", "type": "STRING", "link": 8}
+      ],
+      "outputs": [],
+      "properties": {},
+      "widgets_values": [""],
+      "title": "PLY Output Path"
+    }
+  ],
+  "links": [
+    [1, 1, 0, 2, 0, "GEN3C_TRAJECTORY"],
+    [2, 1, 1, 2, 1, "IMAGE"],
+    [3, 1, 2, null, null, "FLOAT"],
+    [4, 1, 3, 4, 0, "STRING"],
+    [5, 2, 0, null, null, "STRING"],
+    [6, 2, 1, null, null, "GEN3C_TRAJECTORY"],
+    [7, 2, 2, 3, 0, "GEN3C_DATASET"],
+    [8, 3, 0, 5, 0, "STRING"]
+  ],
+  "groups": [],
+  "config": {},
+  "extra": {},
+  "version": 0.4
+}

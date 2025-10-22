@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import math
 import os
 from dataclasses import dataclass
@@ -12,6 +13,9 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 import torch
 from PIL import Image
+
+# Set up logging
+logger = logging.getLogger(__name__)
 
 try:
     import gsplat
@@ -547,19 +551,21 @@ class SplatTrainerGsplat:
 
         if used_fallback:
             if missing_depth_frames > 0:
-                print(
-                    f"[gsplat] Using fallback point initialisation for {missing_depth_frames} frame(s) without depth maps."
+                logger.warning(
+                    f"Using fallback point initialisation for {missing_depth_frames} frame(s) without depth maps."
                 )
             elif invalid_depth_frames > 0:
-                print(
-                    f"[gsplat] Using fallback point initialisation because {invalid_depth_frames} depth map(s) contained no valid samples."
+                logger.warning(
+                    f"Using fallback point initialisation because {invalid_depth_frames} depth map(s) contained no valid samples."
                 )
             else:
-                print("[gsplat] Using fallback point initialisation because available depth maps had no valid samples.")
+                logger.warning("Using fallback point initialisation because available depth maps had no valid samples.")
 
         num_points = points.shape[0]
         if num_points == 0:
             raise RuntimeError("No valid 3D points extracted from dataset.")
+
+        logger.info(f"Initialized {num_points:,} 3D points for training")
 
         # Initialise Gaussian parameters
         means = torch.nn.Parameter(points)
@@ -572,11 +578,16 @@ class SplatTrainerGsplat:
         parameters = [means, log_scales, quat_params, color_params, logit_opacity]
         optimizer = torch.optim.Adam(parameters, lr=learning_rate)
 
+        logger.info(f"Starting training: {max_iterations} iterations, learning_rate={learning_rate}")
+
         frame_indices = list(range(len(frames)))
         rendered_cache: List[Tuple[torch.Tensor, torch.Tensor, torch.Tensor]] = []
         for frame in frames:
             rgb = frame.rgb.to(torch_device)
             rendered_cache.append((rgb, frame.world_to_camera.to(torch_device), frame.camera_to_world.to(torch_device)))
+
+        # Progress logging intervals
+        log_interval = max(1, max_iterations // 10)  # Log 10 times during training
 
         for step in range(max_iterations):
             if frames_per_batch >= len(frame_indices):
@@ -646,11 +657,19 @@ class SplatTrainerGsplat:
             with torch.no_grad():
                 quat_params.copy_(_normalize_quaternions(quat_params))
 
+            # Log progress
+            if (step + 1) % log_interval == 0 or step == 0:
+                logger.info(f"Iteration {step + 1}/{max_iterations}, Loss: {loss_acc.item():.6f}")
+
+        logger.info("Training completed")
+
         output_root = Path(output_dir.replace("${output_dir}", str(Path.cwd() / "output"))).expanduser().resolve()
         output_root.mkdir(parents=True, exist_ok=True)
         ply_dir = output_root / run_name
         ply_dir.mkdir(parents=True, exist_ok=True)
         ply_path = ply_dir / "point_cloud.ply"
+
+        logger.info(f"Writing PLY file ({ply_format} format) to: {ply_path}")
 
         final_scales = torch.exp(log_scales)
         final_quats = _normalize_quaternions(quat_params)
@@ -665,6 +684,7 @@ class SplatTrainerGsplat:
             binary=(ply_format == "binary")
         )
 
+        logger.info(f"Successfully saved Gaussian splat to: {ply_path}")
         return (str(ply_path),)
 
 
