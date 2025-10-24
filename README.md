@@ -1,3 +1,6 @@
+NOT WORKING YET!!!!!!!
+
+
 # ComfyUI-GEN3C-Gsplat
 
 A **simplified and streamlined** ComfyUI node pack that bridges Cosmos/GEN3C video generation with Gaussian Splat (3DGS) training, featuring camera control, pose recovery, quality validation, and end-to-end pipelines from prompt to splat.
